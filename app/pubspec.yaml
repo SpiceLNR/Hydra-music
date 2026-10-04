@@ -1,0 +1,32 @@
+name: hydra_music
+description: Hydra Music - private audio player with P2P folder sync.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  media_kit: ^1.1.11
+  media_kit_libs_audio: ^1.0.5
+  path_provider: ^2.1.4
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  # Шрифт Selawik (MIT) положите в app/assets/fonts/ и раскомментируйте:
+  # fonts:
+  #   - family: Selawik
+  #     fonts:
+  #       - asset: assets/fonts/selawk.ttf
+  #       - asset: assets/fonts/selawkb.ttf
+  #         weight: 700
+  #       - asset: assets/fonts/selawkl.ttf
+  #         weight: 300
