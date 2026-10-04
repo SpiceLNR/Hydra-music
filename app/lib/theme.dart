@@ -58,7 +58,7 @@ class Metro {
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         ),
       ),
-      dialogTheme: const DialogTheme(
+      dialogTheme: const DialogThemeData(
         backgroundColor: surface,
         shape: RoundedRectangleBorder(),
       ),

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../theme.dart';
-import '../widgets/metro_widgets.dart';
 import 'playlist_screen.dart';
 
 class PlaylistsScreen extends StatefulWidget {

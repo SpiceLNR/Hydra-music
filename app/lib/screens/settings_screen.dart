@@ -28,13 +28,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(8),
         children: [
           SwitchListTile(
-            activeColor: Metro.green,
+            activeThumbColor: Metro.green,
             title: const Text('Синхронизировать только по Wi-Fi'),
             value: wifiOnly,
             onChanged: (v) => setState(() => wifiOnly = v),
           ),
           SwitchListTile(
-            activeColor: Metro.green,
+            activeThumbColor: Metro.green,
             title: const Text('Только во время зарядки'),
             value: chargingOnly,
             onChanged: (v) => setState(() => chargingOnly = v),
@@ -53,9 +53,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const Divider(),
-          ListTile(
-            title: const Text('Папка библиотеки'),
-            subtitle: const Text('Android: Music/Hydra/  ·  Windows: %USERPROFILE%\\Music\\Hydra'),
+          const ListTile(
+            title: Text('Папка библиотеки'),
+            subtitle: Text('Android: Music/Hydra/  ·  Windows: %USERPROFILE%\\Music\\Hydra'),
           ),
           const ListTile(
             title: Text('О приложении'),
