@@ -171,6 +171,10 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
                     if let Some(to) = str_field(&payload, "to_playlist_id") {
                         s.playlist_id = to;
                         s.deleted = false; // более поздняя правка возвращает из корзины
+                        // файл мог быть переименован при перемещении (конфликт имён в целевой папке)
+                        if let Some(f) = str_field(&payload, "file_name") {
+                            s.file_name = f;
+                        }
                         // позиция в новом плейлисте; если не указана, ключ остаётся прежним
                         if let Some(k) = str_field(&payload, "order_key") {
                             s.order_key = k;
@@ -263,6 +267,17 @@ pub fn get_track(conn: &Connection, track_id: &str) -> Result<Option<TrackState>
             row_to_track,
         )
         .optional()?)
+}
+
+/// Все неудалённые треки (для сравнения с содержимым папки на диске).
+pub fn live_tracks(conn: &Connection) -> Result<Vec<TrackState>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TRACK_COLUMNS} FROM tracks WHERE deleted = 0 ORDER BY track_id ASC"
+    ))?;
+    let rows = stmt
+        .query_map([], row_to_track)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// Видимые треки плейлиста в порядке воспроизведения.
@@ -571,6 +586,19 @@ mod tests {
         assert_eq!(expired_trash(&conn, 2000 + 31 * day).unwrap(), vec!["t1".to_string()]);
         forget_trashed(&conn, "t1").unwrap();
         assert!(expired_trash(&conn, 2000 + 31 * day).unwrap().is_empty());
+    }
+
+    #[test]
+    fn move_can_rename_the_file() {
+        let conn = open_in_memory().unwrap();
+        let mut c = Clock::new("A");
+        add(&conn, &mut c, "A", 1000, "t1", "rock");
+        record_local(&conn, &mut c, 2000, "A", Kind::Move, "t1",
+            json!({"to_playlist_id": "jazz", "file_name": "song (2).flac"})).unwrap();
+        let t = get_track(&conn, "t1").unwrap().unwrap();
+        assert_eq!(t.playlist_id, "jazz");
+        assert_eq!(t.file_name, "song (2).flac");
+        assert_eq!(live_tracks(&conn).unwrap().len(), 1);
     }
 
     #[test]

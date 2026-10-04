@@ -7,6 +7,7 @@ pub mod clock;
 pub mod db;
 pub mod error;
 pub mod journal;
+pub mod library;
 pub mod naming;
 pub mod order;
 

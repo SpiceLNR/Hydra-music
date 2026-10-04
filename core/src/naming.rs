@@ -55,6 +55,26 @@ pub fn unique_name(wanted: &str, existing: &[String]) -> String {
     }
 }
 
+/// Свободное имя файла среди существующих: "song.flac", "song (2).flac", ...
+pub fn unique_file_name(wanted: &str, existing: &[String]) -> String {
+    let taken: Vec<String> = existing.iter().map(|e| fold_key(e)).collect();
+    if !taken.contains(&fold_key(wanted)) {
+        return wanted.to_string();
+    }
+    let (stem, ext) = match wanted.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (wanted.to_string(), String::new()),
+    };
+    let mut n = 2;
+    loop {
+        let candidate = format!("{stem} ({n}){ext}");
+        if !taken.contains(&fold_key(&candidate)) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 /// Имя скрытого JSON плейлиста: ".Rock.json" (точка = скрытый на Android;
 /// на Windows дополнительно выставляется атрибут Hidden на стороне платформы).
 pub fn playlist_manifest_name(playlist_dir: &str) -> String {
@@ -111,6 +131,15 @@ mod tests {
         let existing = vec!["Rock".to_string(), "rock (2)".to_string()];
         assert_eq!(unique_name("ROCK", &existing), "ROCK (3)");
         assert_eq!(unique_name("Jazz", &existing), "Jazz");
+    }
+
+    #[test]
+    fn unique_file_name_keeps_extension() {
+        let existing = vec!["Song.FLAC".to_string()];
+        assert_eq!(unique_file_name("song.flac", &existing), "song (2).flac");
+        assert_eq!(unique_file_name("other.mp3", &existing), "other.mp3");
+        let existing = vec!["a".to_string()];
+        assert_eq!(unique_file_name("a", &existing), "a (2)");
     }
 
     #[test]
