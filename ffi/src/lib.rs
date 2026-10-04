@@ -106,6 +106,7 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
             arg_usize(args, "index")?,
             now_ms(),
         )),
+        "purge_track" => to_json(st.lib.purge_track(&arg_str(args, "track_id")?)),
         "purge_trash" => to_json(st.lib.purge_expired_trash(now_ms())),
         "cover" => {
             let id = arg_str(args, "track_id")?;
@@ -270,6 +271,11 @@ mod tests {
 
         // у файла без обложки cover = null
         assert_eq!(ok("cover", json!({ "track_id": b })), Value::Null);
+
+        // окончательное удаление из корзины
+        ok("delete_track", json!({ "track_id": a }));
+        ok("purge_track", json!({ "track_id": a }));
+        assert!(ok("trash_items", json!({})).as_array().unwrap().is_empty());
 
         // ошибки ядра доходят текстом, а не падением
         let err = call_json("move_track", json!({ "track_id": "nope", "to_playlist_id": rock }));

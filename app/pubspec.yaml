@@ -12,7 +12,8 @@ dependencies:
   media_kit: ^1.1.11
   media_kit_libs_audio: ^1.0.5
   ffi: ^2.1.3
-  # path_provider и permission_handler вернём на этапе 2 (папка Music/Hydra)
+  path_provider: ^2.1.4
+  permission_handler: ^13.0.0
 
 dev_dependencies:
   flutter_test:

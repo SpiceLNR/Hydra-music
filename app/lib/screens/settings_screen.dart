@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core_bridge.dart';
+import '../library_controller.dart';
 import '../theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -54,9 +55,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const Divider(),
-          const ListTile(
-            title: Text('Папка библиотеки'),
-            subtitle: Text('Android: Music/Hydra/  ·  Windows: %USERPROFILE%\\Music\\Hydra'),
+          ListTile(
+            title: const Text('Папка библиотеки'),
+            subtitle: Text(hydraLibrary.rootPath ?? 'Android: Music/Hydra  ·  Windows: Музыка\\Hydra'),
           ),
           // Проверка связи Flutter <-> Rust (временная диагностика этапа 2)
           FutureBuilder<dynamic>(

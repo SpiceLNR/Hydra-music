@@ -1,45 +1,139 @@
 import 'package:flutter/material.dart';
 
+import '../core_bridge.dart';
+import '../library_controller.dart';
+import '../models.dart';
+import '../theme.dart';
 import '../widgets/metro_widgets.dart';
 
-/// Корзина: восстановить или удалить окончательно. Каркас с пустым списком;
-/// данные придут из таблицы trash в Rust-ядре.
-class TrashScreen extends StatelessWidget {
+/// Корзина: удалённые в приложении треки хранятся 30 дней, потом стираются сами.
+class TrashScreen extends StatefulWidget {
   const TrashScreen({super.key});
+
+  @override
+  State<TrashScreen> createState() => _TrashScreenState();
+}
+
+class _TrashScreenState extends State<TrashScreen> {
+  List<TrashItem> _items = const [];
+  bool _loading = true;
+  String? _selectedId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _toast(String message) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+
+  Future<void> _load() async {
+    try {
+      final items = await hydraLibrary.trashItems();
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+        if (!_items.any((i) => i.id == _selectedId)) _selectedId = null;
+      });
+    } on CoreException catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _toast(e.message);
+    }
+  }
+
+  Future<void> _restore(String id) async {
+    try {
+      await hydraLibrary.restoreTrack(id);
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+    await _load();
+  }
+
+  Future<void> _purge(TrashItem item) async {
+    final ok = await confirmAction(
+      context,
+      title: 'Удалить навсегда?',
+      message: '«${item.title}» будет стёрт без возможности восстановления.',
+      confirmLabel: 'Удалить',
+      danger: true,
+    );
+    if (!ok) return;
+    try {
+      await hydraLibrary.purgeTrack(item.id);
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+    await _load();
+  }
+
+  TrashItem? get _selected {
+    for (final i in _items) {
+      if (i.id == _selectedId) return i;
+    }
+    return null;
+  }
+
+  String _age(int deletedMs) {
+    final days = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(deletedMs)).inDays;
+    if (days <= 0) return 'удалён сегодня';
+    return 'удалён $days дн. назад';
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('корзина')),
-      body: const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Корзина пуста.\nУдалённые треки хранятся здесь 30 дней, '
-            'затем стираются окончательно.',
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: Metro.green))
+          : _items.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Корзина пуста.\nУдалённые треки хранятся здесь 30 дней, '
+                      'затем стираются окончательно.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: _items.length,
+                  itemBuilder: (context, i) {
+                    final item = _items[i];
+                    final isSel = item.id == _selectedId;
+                    return Container(
+                      color: isSel ? Metro.surface : null,
+                      child: ListTile(
+                        leading: const Cover(isVideo: false),
+                        title: Text(item.title, style: const TextStyle(fontSize: 18)),
+                        subtitle: Text('${item.fileName} · ${_age(item.deletedMs)}'),
+                        onTap: () => setState(() => _selectedId = isSel ? null : item.id),
+                      ),
+                    );
+                  },
+                ),
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(8),
           child: Row(
             children: [
-              const Expanded(
-                child: ElevatedButton(onPressed: null, child: Text('Восстановить')),
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.restore),
+                  label: const Text('Восстановить'),
+                  onPressed: _selected == null ? null : () => _restore(_selected!.id),
+                ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: OutlinedButton(
-                  onPressed: () => confirmAction(
-                    context,
-                    title: 'Удалить навсегда?',
-                    message: 'Это действие нельзя отменить.',
-                    confirmLabel: 'Удалить',
-                    danger: true,
-                  ),
-                  child: const Text('Очистить'),
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text('Навсегда'),
+                  onPressed: _selected == null ? null : () => _purge(_selected!),
                 ),
               ),
             ],

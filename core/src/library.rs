@@ -241,6 +241,16 @@ impl Library {
         Ok(())
     }
 
+    /// Окончательно стирает трек из корзины. Запись об удалении в журнале остаётся,
+    /// чтобы другие устройства тоже знали, что трек удалён.
+    pub fn purge_track(&mut self, track_id: &str) -> Result<()> {
+        journal::get_track(&self.conn, track_id)?
+            .filter(|t| t.deleted)
+            .ok_or_else(|| Error::Invalid(format!("track {track_id} is not in trash")))?;
+        let _ = fs::remove_dir_all(self.trash_dir(track_id));
+        journal::forget_trashed(&self.conn, track_id)
+    }
+
     /// Удаляет из корзины всё старше 30 дней. Возвращает число очищенных треков.
     pub fn purge_expired_trash(&mut self, now_ms: u64) -> Result<usize> {
         let ids = journal::expired_trash(&self.conn, now_ms)?;
@@ -749,6 +759,26 @@ mod tests {
         assert!(lib.trash_items().unwrap().is_empty());
         assert_eq!(names(&lib, "Rock"), ["a.mp3"]);
         assert_eq!(lib.scan(T0 + 5).unwrap(), ScanReport::default());
+    }
+
+    #[test]
+    fn purge_track_erases_file_but_keeps_tombstone() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Rock", "b.mp3", "bbb");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+        // из корзины можно стирать только удалённое
+        assert!(lib.purge_track(&id).is_err());
+        lib.delete_track(&id, T0 + 2).unwrap();
+        lib.purge_track(&id).unwrap();
+        assert!(lib.trash_items().unwrap().is_empty());
+        assert!(!lib.root().join(INTERNAL_DIR).join("trash").join(&id).exists());
+        assert!(lib.restore_track(&id, T0 + 3).is_err());
+        // повторный скан не воскрешает стёртый трек
+        assert_eq!(lib.scan(T0 + 4).unwrap(), ScanReport::default());
+        assert_eq!(names(&lib, "Rock"), ["b.mp3"]);
     }
 
     #[test]
