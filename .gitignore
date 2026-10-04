@@ -1,0 +1,13 @@
+target/
+Cargo.lock.bak
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.DS_Store
+# платформенные папки генерируются командой flutter create
+app/android/
+app/windows/
+app/.metadata
