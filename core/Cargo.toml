@@ -7,7 +7,7 @@ license = "MIT"
 
 [lib]
 name = "hydra_core"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib"]
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

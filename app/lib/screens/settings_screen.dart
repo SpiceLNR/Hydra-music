@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core_bridge.dart';
 import '../theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -56,6 +57,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const ListTile(
             title: Text('Папка библиотеки'),
             subtitle: Text('Android: Music/Hydra/  ·  Windows: %USERPROFILE%\\Music\\Hydra'),
+          ),
+          // Проверка связи Flutter <-> Rust (временная диагностика этапа 2)
+          FutureBuilder<dynamic>(
+            future: Core.call('version'),
+            builder: (context, snap) {
+              final String text;
+              if (snap.connectionState != ConnectionState.done) {
+                text = 'проверяю…';
+              } else if (snap.hasError) {
+                text = 'ОШИБКА: ${snap.error}';
+              } else {
+                final v = snap.data as Map<String, dynamic>;
+                text = 'работает (ядро ${v['core']}, мост ${v['ffi']})';
+              }
+              return ListTile(title: const Text('Ядро синхронизации'), subtitle: Text(text));
+            },
           ),
           const ListTile(
             title: Text('О приложении'),

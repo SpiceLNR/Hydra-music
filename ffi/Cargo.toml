@@ -1,0 +1,23 @@
+[package]
+name = "hydra_ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI over hydra_core: one JSON in, one JSON out"
+license = "MIT"
+
+[lib]
+name = "hydra_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+hydra_core = { path = "../core" }
+serde = "1"
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+strip = true

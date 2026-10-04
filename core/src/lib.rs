@@ -12,3 +12,5 @@ pub mod naming;
 pub mod order;
 
 pub use error::{Error, Result};
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
