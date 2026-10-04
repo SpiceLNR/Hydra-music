@@ -1,4 +1,4 @@
-/// Модели данных, приходящих из Rust-ядра (JSON), и временная модель устройства.
+// Модели данных, приходящих из Rust-ядра (JSON), и временная модель устройства.
 
 class PlaylistInfo {
   PlaylistInfo({required this.id, required this.name, required this.trackCount});
