@@ -1,7 +1,8 @@
-import 'dart:ui' show Size;
-
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydra_music/main.dart';
+import 'package:hydra_music/widgets/metro_widgets.dart';
+import 'package:hydra_music/widgets/now_playing_bar.dart';
 
 void main() {
   testWidgets('home screen shows the four main tiles', (tester) async {
@@ -17,5 +18,89 @@ void main() {
     expect(find.text('Устройства'), findsOneWidget);
     expect(find.text('Корзина'), findsOneWidget);
     expect(find.text('Настройки'), findsOneWidget);
+    // пока ничего не играло, панели «Сейчас играет» нет
+    expect(find.textContaining('Сейчас играет'), findsNothing);
+  });
+
+  testWidgets('MetroToggle flips its value on tap', (tester) async {
+    var value = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => MetroToggle(
+              value: value,
+              onChanged: (v) => setState(() => value = v),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(MetroToggle));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(value, isTrue);
+
+    await tester.tap(find.byType(MetroToggle));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(value, isFalse);
+  });
+
+  testWidgets('MetroSwitchRow shows Вкл/Выкл and reacts to a tap on the row', (tester) async {
+    var value = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => MetroSwitchRow(
+              title: 'Только по Wi-Fi',
+              value: value,
+              onChanged: (v) => setState(() => value = v),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Выкл'), findsOneWidget);
+    await tester.tap(find.text('Только по Wi-Fi'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(value, isTrue);
+    expect(find.text('Вкл'), findsOneWidget);
+  });
+
+  testWidgets('MetroSlider seeks to the tapped position', (tester) async {
+    double? changed;
+    double? ended;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 200,
+              child: MetroSlider(
+                value: 0,
+                max: 100,
+                onChanged: (v) => changed = v,
+                onChangeEnd: (v) => ended = v,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // нажатие в центре полосы = середина трека
+    await tester.tapAt(tester.getCenter(find.byType(MetroSlider)));
+    await tester.pump();
+    expect(changed, closeTo(50, 1));
+    expect(ended, closeTo(50, 1));
+  });
+
+  testWidgets('NowPlayingBar is hidden until something has played', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: NowPlayingBar())),
+    );
+    expect(find.textContaining('Сейчас играет'), findsNothing);
   });
 }

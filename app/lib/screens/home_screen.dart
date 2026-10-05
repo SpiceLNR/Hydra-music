@@ -2,11 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../demo_data.dart';
 import '../library_controller.dart';
-import '../player_service.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
+import '../widgets/now_playing_bar.dart';
 import 'devices_screen.dart';
-import 'player_screen.dart';
 import 'playlists_screen.dart';
 import 'settings_screen.dart';
 import 'trash_screen.dart';
@@ -38,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _open(Widget screen) =>
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
 
   String _playlistsSubtitle(LibraryController lib) {
     if (lib.status != LibraryStatus.ready) return 'библиотека';
@@ -63,47 +62,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
                 const SectionTitle('главная'),
                 _StatusBanner(lib: hydraLibrary),
-                ValueListenableBuilder<bool>(
-                  valueListenable: PlayerService.hasTrack,
-                  builder: (context, has, _) {
-                    if (!has) return const SizedBox.shrink();
-                    return ListenableBuilder(
-                      listenable: PlayerService.instance,
-                      builder: (context, _) {
-                        final t = PlayerService.instance.current;
-                        return Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                          child: Material(
-                            color: Metro.greenDark,
-                            child: InkWell(
-                              onTap: () => _open(const PlayerScreen()),
-                              child: Padding(
-                                padding: const EdgeInsets.all(14),
-                                child: Row(
-                                  children: [
-                                    Icon(PlayerService.instance.playing
-                                        ? Icons.graphic_eq
-                                        : Icons.pause),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        t == null ? 'Сейчас играет' : 'Сейчас играет: ${t.title}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 16),
-                                      ),
-                                    ),
-                                    const Icon(Icons.chevron_right),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
                 Padding(
                   padding: const EdgeInsets.all(8),
                   child: GridView.count(
@@ -147,6 +105,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           },
         ),
       ),
+      bottomNavigationBar: const NowPlayingBar(safeBottom: true),
     );
   }
 }
@@ -161,7 +120,7 @@ class _StatusBanner extends StatelessWidget {
     final children = <Widget>[];
     if (lib.status == LibraryStatus.loading || lib.scanning) {
       children.addAll(const [
-        LinearProgressIndicator(color: Metro.green, backgroundColor: Metro.surface),
+        MetroProgress(),
         SizedBox(height: 8),
         Text('Сканирую библиотеку…'),
       ]);

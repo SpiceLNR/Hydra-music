@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../core_bridge.dart';
 import '../library_controller.dart';
 import '../theme.dart';
+import '../widgets/metro_widgets.dart';
 
+/// Настройки. Панели «Сейчас играет» здесь нет намеренно.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -29,15 +31,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(8),
         children: [
-          SwitchListTile(
-            activeThumbColor: Metro.green,
-            title: const Text('Синхронизировать только по Wi-Fi'),
+          MetroSwitchRow(
+            title: 'Синхронизировать только по Wi-Fi',
             value: wifiOnly,
             onChanged: (v) => setState(() => wifiOnly = v),
           ),
-          SwitchListTile(
-            activeThumbColor: Metro.green,
-            title: const Text('Только во время зарядки'),
+          MetroSwitchRow(
+            title: 'Только во время зарядки',
             value: chargingOnly,
             onChanged: (v) => setState(() => chargingOnly = v),
           ),
@@ -50,7 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text('Relay-сервер (для связи через интернет)',
                     style: Theme.of(context).textTheme.bodyMedium),
                 const SizedBox(height: 8),
-                TextField(controller: relay),
+                TextField(controller: relay, decoration: Metro.inputDecoration()),
               ],
             ),
           ),

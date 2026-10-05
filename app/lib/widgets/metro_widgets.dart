@@ -103,3 +103,184 @@ class Cover extends StatelessWidget {
             color: Colors.white, size: size * 0.55),
       );
 }
+
+/// Переключатель в стиле Metro: прямоугольная рамка и прямоугольный ползунок.
+/// «Выкл» - рамка и ползунок слева; «Вкл» - зелёная заливка, ползунок справа.
+class MetroToggle extends StatelessWidget {
+  const MetroToggle({super.key, required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 52,
+          height: 24,
+          decoration: BoxDecoration(
+            color: value ? Metro.green : Colors.transparent,
+            border: Border.all(color: value ? Metro.green : Colors.white70, width: 2),
+          ),
+          child: AnimatedAlign(
+            duration: const Duration(milliseconds: 150),
+            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(width: 14, margin: const EdgeInsets.all(2), color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Строка настроек: название слева, «Вкл/Выкл» и переключатель справа.
+class MetroSwitchRow extends StatelessWidget {
+  const MetroSwitchRow({
+    super.key,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Row(
+          children: [
+            Expanded(child: Text(title, style: const TextStyle(fontSize: 18))),
+            Text(value ? 'Вкл' : 'Выкл',
+                style: const TextStyle(fontSize: 16, color: Metro.textDim)),
+            const SizedBox(width: 12),
+            MetroToggle(value: value, onChanged: onChanged),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Полоса позиции: тонкая линия и прямоугольный ползунок, без скруглений.
+/// Нажатие в любом месте перематывает, ползунок можно тянуть.
+class MetroSlider extends StatelessWidget {
+  const MetroSlider({
+    super.key,
+    required this.value,
+    required this.max,
+    required this.onChanged,
+    this.onChangeEnd,
+  });
+
+  final double value;
+  final double max;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double>? onChangeEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final frac = max <= 0 ? 0.0 : (value / max).clamp(0.0, 1.0).toDouble();
+        final thumbLeft = (w * frac - 5).clamp(0.0, w > 10 ? w - 10 : 0.0).toDouble();
+
+        double toValue(double dx) {
+          final f = (dx / (w <= 0 ? 1 : w)).clamp(0.0, 1.0).toDouble();
+          return f * max;
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (d) {
+            final v = toValue(d.localPosition.dx);
+            onChanged(v);
+            onChangeEnd?.call(v);
+          },
+          onHorizontalDragUpdate: (d) => onChanged(toValue(d.localPosition.dx)),
+          onHorizontalDragEnd: (_) => onChangeEnd?.call(value),
+          child: SizedBox(
+            height: 40,
+            width: double.infinity,
+            child: Stack(
+              alignment: Alignment.centerLeft,
+              children: [
+                Container(height: 4, color: Colors.white24),
+                Container(width: w * frac, height: 4, color: Metro.green),
+                Positioned(
+                  left: thumbLeft,
+                  child: Container(width: 10, height: 24, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Индикатор ожидания в стиле Metro: пять квадратиков «пролетают» слева направо.
+class MetroProgress extends StatefulWidget {
+  const MetroProgress({super.key});
+
+  @override
+  State<MetroProgress> createState() => _MetroProgressState();
+}
+
+class _MetroProgressState extends State<MetroProgress> with SingleTickerProviderStateMixin {
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  double _x(double w, int i) {
+    var t = _c.value - i * 0.05;
+    if (t < 0) t += 1;
+    return -6 + (w + 6) * Curves.easeInOut.transform(t);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 6,
+      width: double.infinity,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          return AnimatedBuilder(
+            animation: _c,
+            builder: (context, _) => Stack(
+              children: [
+                for (var i = 0; i < 5; i++)
+                  Positioned(
+                    left: _x(w, i),
+                    top: 1,
+                    child: const SizedBox(
+                      width: 4,
+                      height: 4,
+                      child: ColoredBox(color: Metro.green),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}

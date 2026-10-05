@@ -60,7 +60,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     child: Text(track.artist ?? track.fileName,
                         style: Theme.of(context).textTheme.bodyMedium),
                   ),
-                  Slider(
+                  const SizedBox(height: 8),
+                  MetroSlider(
                     value: value,
                     max: max,
                     onChanged: (v) => setState(() => _drag = v),

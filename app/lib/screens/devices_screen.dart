@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
+import '../widgets/now_playing_bar.dart';
 
 class DevicesScreen extends StatefulWidget {
   const DevicesScreen({super.key, required this.devices});
@@ -58,7 +59,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                Icon(Icons.circle, size: 14, color: d.online ? Metro.green : Colors.grey),
+                Container(width: 12, height: 12, color: d.online ? Metro.green : Colors.grey),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -78,15 +79,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
           );
         },
       ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: ElevatedButton.icon(
-            onPressed: _pair,
-            icon: const Icon(Icons.qr_code),
-            label: const Text('Добавить устройство'),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const NowPlayingBar(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _pair,
+                  icon: const Icon(Icons.qr_code),
+                  label: const Text('Добавить устройство'),
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

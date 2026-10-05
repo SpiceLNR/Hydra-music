@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../core_bridge.dart';
 import '../library_controller.dart';
 import '../theme.dart';
+import '../widgets/metro_widgets.dart';
+import '../widgets/now_playing_bar.dart';
 import 'playlist_screen.dart';
 
 class PlaylistsScreen extends StatelessWidget {
@@ -17,7 +19,7 @@ class PlaylistsScreen extends StatelessWidget {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Название папки'),
+          decoration: Metro.inputDecoration(hint: 'Название папки'),
         ),
         actions: [
           OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
@@ -56,8 +58,7 @@ class PlaylistsScreen extends StatelessWidget {
           final playlists = hydraLibrary.playlists;
           return Column(
             children: [
-              if (hydraLibrary.scanning)
-                const LinearProgressIndicator(color: Metro.green, backgroundColor: Metro.surface),
+              if (hydraLibrary.scanning) const MetroProgress(),
               Expanded(
                 child: playlists.isEmpty
                     ? const Center(
@@ -79,7 +80,7 @@ class PlaylistsScreen extends StatelessWidget {
                           return Material(
                             color: Metro.green,
                             child: InkWell(
-                              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                                   builder: (_) => PlaylistScreen(playlist: p))),
                               child: Padding(
                                 padding: const EdgeInsets.all(16),
@@ -111,15 +112,24 @@ class PlaylistsScreen extends StatelessWidget {
           );
         },
       ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: ElevatedButton.icon(
-            onPressed: () => _create(context),
-            icon: const Icon(Icons.add),
-            label: const Text('Новый плейлист'),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const NowPlayingBar(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _create(context),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Новый плейлист'),
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

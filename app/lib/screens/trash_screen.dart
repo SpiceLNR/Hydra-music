@@ -5,6 +5,7 @@ import '../library_controller.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
+import '../widgets/now_playing_bar.dart';
 
 /// Корзина: удалённые в приложении треки хранятся 30 дней, потом стираются сами.
 class TrashScreen extends StatefulWidget {
@@ -27,6 +28,13 @@ class _TrashScreenState extends State<TrashScreen> {
 
   void _toast(String message) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+
+  TrashItem? get _selected {
+    for (final i in _items) {
+      if (i.id == _selectedId) return i;
+    }
+    return null;
+  }
 
   Future<void> _load() async {
     try {
@@ -70,13 +78,6 @@ class _TrashScreenState extends State<TrashScreen> {
     await _load();
   }
 
-  TrashItem? get _selected {
-    for (final i in _items) {
-      if (i.id == _selectedId) return i;
-    }
-    return null;
-  }
-
   String _age(int deletedMs) {
     final days = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(deletedMs)).inDays;
     if (days <= 0) return 'удалён сегодня';
@@ -85,10 +86,11 @@ class _TrashScreenState extends State<TrashScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final selected = _selected;
     return Scaffold(
       appBar: AppBar(title: const Text('корзина')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: Metro.green))
+          ? const Center(child: SizedBox(width: 200, child: MetroProgress()))
           : _items.isEmpty
               ? const Center(
                   child: Padding(
@@ -116,29 +118,35 @@ class _TrashScreenState extends State<TrashScreen> {
                     );
                   },
                 ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.restore),
-                  label: const Text('Восстановить'),
-                  onPressed: _selected == null ? null : () => _restore(_selected!.id),
-                ),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const NowPlayingBar(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.restore),
+                      label: const Text('Восстановить'),
+                      onPressed: selected == null ? null : () => _restore(selected.id),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.delete_forever),
+                      label: const Text('Навсегда'),
+                      onPressed: selected == null ? null : () => _purge(selected),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  icon: const Icon(Icons.delete_forever),
-                  label: const Text('Навсегда'),
-                  onPressed: _selected == null ? null : () => _purge(_selected!),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
