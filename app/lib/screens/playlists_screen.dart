@@ -94,9 +94,11 @@ class PlaylistsScreen extends StatelessWidget {
                                         children: [
                                           Text(p.name,
                                               style: const TextStyle(
-                                                  fontSize: 22, fontWeight: FontWeight.w300)),
+                                                  fontSize: 22,
+                                                  fontWeight: FontWeight.w400,
+                                                  color: Colors.white)),
                                           Text('${p.trackCount} треков',
-                                              style: const TextStyle(color: Colors.white70)),
+                                              style: const TextStyle(color: Colors.white)),
                                         ],
                                       ),
                                     ),
