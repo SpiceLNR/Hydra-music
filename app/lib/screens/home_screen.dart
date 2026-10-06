@@ -55,10 +55,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             return ListView(
               padding: const EdgeInsets.only(bottom: 16),
               children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 24, 16, 4),
-                  child: Text('HYDRA MUSIC',
-                      style: TextStyle(fontSize: 14, letterSpacing: 2, color: Metro.green)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 24, 16, 4),
+                  child: Row(
+                    children: [
+                      Image.asset(
+                        'assets/logo.png',
+                        width: 40,
+                        height: 40,
+                        errorBuilder: (_, __, ___) => const SizedBox(width: 40, height: 40),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('HYDRA MUSIC',
+                          style: TextStyle(fontSize: 14, letterSpacing: 2, color: Metro.green)),
+                    ],
+                  ),
                 ),
                 const SectionTitle('главная'),
                 _StatusBanner(lib: hydraLibrary),
