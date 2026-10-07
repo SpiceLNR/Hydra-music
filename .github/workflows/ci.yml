@@ -82,3 +82,42 @@ jobs:
         with:
           name: hydra-music-release-apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
+
+  windows-build:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ffi
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build Rust bridge (hydra_ffi.dll)
+        working-directory: ffi
+        run: cargo build --release
+      - name: Generate Windows folder
+        working-directory: app
+        run: flutter create --platforms=windows --project-name hydra_music --org dev.hydra .
+      - name: Patch Windows project
+        working-directory: app
+        shell: bash
+        run: python ../tools/patch_android_manifest.py windows
+      - name: Build Windows app
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build windows --release
+      - name: Put the Rust bridge next to the exe
+        shell: bash
+        run: cp ffi/target/release/hydra_ffi.dll app/build/windows/x64/runner/Release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hydra-music-windows
+          path: app/build/windows/x64/runner/Release
