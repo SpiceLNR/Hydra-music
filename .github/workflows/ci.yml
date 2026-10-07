@@ -73,3 +73,12 @@ jobs:
         with:
           name: hydra-music-debug-apk
           path: app/build/app/outputs/flutter-apk/app-debug.apk
+      # Для повседневного использования: быстрее и экономнее к батарее, чем debug.
+      # Подписывается отладочным ключом Flutter: подходит для личной установки.
+      - name: Build release APK
+        working-directory: app
+        run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hydra-music-release-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
