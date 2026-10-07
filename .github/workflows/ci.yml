@@ -111,6 +111,10 @@ jobs:
         run: python ../tools/patch_android_manifest.py windows
       - name: Build Windows app
         working-directory: app
+        env:
+          # Новый Visual Studio отказывается собирать старый плагин permission_handler_windows
+          # (<experimental/coroutine>); этот флаг возвращает прежнее поведение.
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: |
           flutter pub get
           flutter build windows --release
