@@ -147,13 +147,19 @@ def patch_gradle() -> int:
     else:
         print(f"compileSdk: уже {COMPILE_SDK}")
 
-    flag = f"android.suppressUnsupportedCompileSdk={COMPILE_SDK}"
     props = GRADLE_PROPS.read_text(encoding="utf-8") if GRADLE_PROPS.exists() else ""
-    if flag not in props:
+    wanted = [
+        f"android.suppressUnsupportedCompileSdk={COMPILE_SDK}",
+        # Kotlin компилируется внутри процесса Gradle: фоновый демон Kotlin на сборке
+        # release падал с «Daemon compilation failed».
+        "kotlin.compiler.execution.strategy=in-process",
+    ]
+    added = [w for w in wanted if w not in props]
+    if added:
         if props and not props.endswith("\n"):
             props += "\n"
-        GRADLE_PROPS.write_text(props + flag + "\n", encoding="utf-8")
-        print("gradle.properties: добавлено подавление предупреждения о compileSdk")
+        GRADLE_PROPS.write_text(props + "\n".join(added) + "\n", encoding="utf-8")
+        print(f"gradle.properties: добавлено {len(added)} настр.")
     return 0
 
 
