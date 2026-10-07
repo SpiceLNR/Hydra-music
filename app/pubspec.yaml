@@ -29,12 +29,13 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
-  # Шрифт Selawik (MIT) положите в app/assets/fonts/ и раскомментируйте:
-  # fonts:
-  #   - family: Selawik
-  #     fonts:
-  #       - asset: assets/fonts/selawk.ttf
-  #       - asset: assets/fonts/selawkb.ttf
-  #         weight: 700
-  #       - asset: assets/fonts/selawkl.ttf
-  #         weight: 300
+  # Шрифт Selawik (MIT). Лежит только обычное начертание; жирное и светлое Flutter
+  # подставит из него. Добавите selawkb.ttf / selawkl.ttf - раскомментируйте строки ниже.
+  fonts:
+    - family: Selawik
+      fonts:
+        - asset: assets/fonts/selawk.ttf
+        # - asset: assets/fonts/selawkb.ttf
+        #   weight: 700
+        # - asset: assets/fonts/selawkl.ttf
+        #   weight: 300
