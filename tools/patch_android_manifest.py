@@ -189,6 +189,15 @@ def patch_windows() -> int:
         if new != text:
             WIN_MAIN.write_text(new, encoding="utf-8")
             print("Название окна Windows: задано")
+    cmake = pathlib.Path("windows/CMakeLists.txt")
+    flag = "add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)"
+    if cmake.exists():
+        text = cmake.read_text(encoding="utf-8")
+        if flag not in text:
+            new = re.sub(r"^(project\(.*\)\s*)$", lambda m: m.group(1) + "\n" + flag + "\n", text, count=1, flags=re.MULTILINE)
+            if new != text:
+                cmake.write_text(new, encoding="utf-8")
+                print("CMake: подавлено устаревание <experimental/coroutine>")
     if WIN_RC.exists():
         text = WIN_RC.read_bytes().decode("utf-8", errors="surrogateescape")
         new = re.sub(
