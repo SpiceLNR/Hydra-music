@@ -5,9 +5,11 @@
  2. compileSdk = 37 (Android 17) и подавление предупреждения AGP.
  3. Фоновая музыка: служба и приёмник кнопок audio_service, MainActivity -> AudioServiceActivity.
  4. Название приложения «Hydra Music» и иконка (из tools/icons).
- 5. Иконка Windows (windows/runner/resources/app_icon.ico).
+ 5. Windows: иконка (windows/runner/resources/app_icon.ico) и название окна «Hydra Music».
 
-Запуск (из папки app/):  python3 ../tools/patch_android_manifest.py
+Запуск (из папки app/):
+    python3 ../tools/patch_android_manifest.py           - Android (и иконка Windows, если папка есть)
+    python3 ../tools/patch_android_manifest.py windows   - только Windows (сборка на Windows)
 Безопасно запускать повторно: уже сделанное пропускается.
 """
 import pathlib
@@ -15,12 +17,19 @@ import re
 import shutil
 import sys
 
+# Консоль Windows по умолчанию не умеет русские буквы: печатаем в UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 MANIFEST = pathlib.Path("android/app/src/main/AndroidManifest.xml")
 GRADLE_KTS = pathlib.Path("android/app/build.gradle.kts")
 GRADLE_PROPS = pathlib.Path("android/gradle.properties")
 MAIN_DIR = pathlib.Path("android/app/src/main")
 ICONS = pathlib.Path(__file__).resolve().parent / "icons"
 WIN_ICON = pathlib.Path("windows/runner/resources/app_icon.ico")
+WIN_MAIN = pathlib.Path("windows/runner/main.cpp")
+WIN_RC = pathlib.Path("windows/runner/Runner.rc")
 
 COMPILE_SDK = 37
 APP_LABEL = "Hydra Music"
@@ -162,15 +171,41 @@ def patch_icons() -> int:
             shutil.copyfile(f, dst)
             count += 1
     print(f"Иконки Android: скопировано {count} файлов")
+    return 0
+
+
+def patch_windows() -> int:
+    """Иконка и название окна. Не считается ошибкой, если папки windows нет."""
+    if not WIN_ICON.parent.exists():
+        print("Папка windows не найдена: пропускаю.")
+        return 0
     ico = ICONS / "windows" / "app_icon.ico"
-    if ico.exists() and WIN_ICON.parent.exists():
+    if ico.exists():
         shutil.copyfile(ico, WIN_ICON)
         print("Иконка Windows: заменена")
+    if WIN_MAIN.exists():
+        text = WIN_MAIN.read_text(encoding="utf-8")
+        new = text.replace('L"hydra_music"', f'L"{APP_LABEL}"')
+        if new != text:
+            WIN_MAIN.write_text(new, encoding="utf-8")
+            print("Название окна Windows: задано")
+    if WIN_RC.exists():
+        text = WIN_RC.read_bytes().decode("utf-8", errors="surrogateescape")
+        new = re.sub(
+            r'(VALUE "(?:FileDescription|ProductName)", ")[^"]*(")',
+            lambda m: f"{m.group(1)}{APP_LABEL}{m.group(2)}",
+            text,
+        )
+        if new != text:
+            WIN_RC.write_bytes(new.encode("utf-8", errors="surrogateescape"))
+            print("Свойства exe (Windows): заданы")
     return 0
 
 
 def main() -> int:
-    rc = patch_manifest() + patch_activity() + patch_gradle() + patch_icons()
+    if len(sys.argv) > 1 and sys.argv[1] == "windows":
+        return patch_windows()
+    rc = patch_manifest() + patch_activity() + patch_gradle() + patch_icons() + patch_windows()
     return 1 if rc else 0
 
 
