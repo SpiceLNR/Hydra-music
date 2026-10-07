@@ -18,6 +18,8 @@ sha2 = "0.10"
 thiserror = "1"
 unicode-normalization = "0.1"
 lofty = "0.22"
+# обложки: чтение png/jpeg/webp и сжатие до 1000 px (в теги кладётся jpeg)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [dev-dependencies]
 tempfile = "3"

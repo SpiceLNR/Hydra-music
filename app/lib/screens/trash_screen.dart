@@ -78,10 +78,28 @@ class _TrashScreenState extends State<TrashScreen> {
     await _load();
   }
 
+  Future<void> _emptyAll() async {
+    final ok = await confirmAction(
+      context,
+      title: 'Очистить корзину?',
+      message: 'Все треки в корзине (${_items.length}) будут стёрты без возможности восстановления.',
+      confirmLabel: 'Очистить',
+      danger: true,
+    );
+    if (!ok) return;
+    try {
+      await hydraLibrary.emptyTrash();
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+    await _load();
+  }
+
   String _age(int deletedMs) {
     final days = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(deletedMs)).inDays;
-    if (days <= 0) return 'удалён сегодня';
-    return 'удалён $days дн. назад';
+    final left = (30 - days).clamp(0, 30);
+    final when = days <= 0 ? 'удалён сегодня' : 'удалён $days дн. назад';
+    return '$when, осталось $left дн.';
   }
 
   @override
@@ -125,7 +143,10 @@ class _TrashScreenState extends State<TrashScreen> {
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(8),
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+              Row(
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
@@ -142,6 +163,17 @@ class _TrashScreenState extends State<TrashScreen> {
                       onPressed: selected == null ? null : () => _purge(selected),
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: const Text('Очистить корзину'),
+                  onPressed: _items.isEmpty ? null : _emptyAll,
+                ),
+              ),
                 ],
               ),
             ),

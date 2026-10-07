@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../core_bridge.dart';
 import '../library_controller.dart';
@@ -12,8 +13,9 @@ import 'player_screen.dart';
 
 /// Список треков плейлиста.
 ///
-/// Обычный режим: нажатие выбирает трек, внизу кнопки «Играть», «Переместить», «Удалить»
-/// (удаление и перемещение с подтверждением).
+/// Обычный режим: нажатие выбирает трек, внизу кнопки «Играть», «Название», «Обложка»,
+/// «Переместить», «Удалить» (удаление и перемещение с подтверждением).
+/// Пустой плейлист можно удалить кнопкой по центру экрана.
 /// Режим редактирования: включается долгим нажатием на любой трек; порядок меняется
 /// перетаскиванием за зелёную область справа. Кнопка «Готово» (или «назад») выходит из режима.
 class PlaylistScreen extends StatefulWidget {
@@ -121,6 +123,74 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     );
     if (!ok) return;
     await _act(() => hydraLibrary.deleteTrack(t.id));
+  }
+
+  Future<void> _rename(TrackInfo t) async {
+    final controller = TextEditingController(text: t.title);
+    final title = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Название трека'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: Metro.inputDecoration(hint: 'Название'),
+        ),
+        actions: [
+          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    if (title == null || title.isEmpty || title == t.title) return;
+    try {
+      final written = await hydraLibrary.renameTrack(t.id, title);
+      if (mounted) {
+        _toast(written
+            ? 'Название записано в файл.'
+            : 'Этот формат не хранит теги: название сохранено только в приложении.');
+      }
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+    await _load();
+  }
+
+  Future<void> _changeCover(TrackInfo t) async {
+    final XFile? picked;
+    try {
+      picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    } catch (e) {
+      if (mounted) _toast('Не удалось открыть выбор картинки: $e');
+      return;
+    }
+    if (picked == null) return;
+    try {
+      await hydraLibrary.setCover(t.id, picked.path);
+      if (mounted) _toast('Обложка записана в файл.');
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+    await _load();
+  }
+
+  Future<void> _deletePlaylist() async {
+    final ok = await confirmAction(
+      context,
+      title: 'Удалить плейлист?',
+      message: 'Пустая папка «${widget.playlist.name}» будет удалена.',
+      confirmLabel: 'Удалить',
+      danger: true,
+    );
+    if (!ok) return;
+    try {
+      await hydraLibrary.deletePlaylist(widget.playlist.id);
+      if (mounted) Navigator.of(context).pop();
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
   }
 
   Future<void> _move(TrackInfo t) async {
@@ -261,25 +331,42 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             child: Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Играть'),
+                  child: MetroAction(
+                    icon: Icons.play_arrow,
+                    label: 'Играть',
+                    filled: true,
                     onPressed: () => _play(selected),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
                 Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.drive_file_move_outline),
-                    label: const Text('Переместить'),
+                  child: MetroAction(
+                    icon: Icons.edit_outlined,
+                    label: 'Название',
+                    onPressed: () => _rename(selected),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: MetroAction(
+                    icon: Icons.image_outlined,
+                    label: 'Обложка',
+                    onPressed: () => _changeCover(selected),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: MetroAction(
+                    icon: Icons.drive_file_move_outline,
+                    label: 'Переместить',
                     onPressed: () => _move(selected),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
                 Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Удалить'),
+                  child: MetroAction(
+                    icon: Icons.delete_outline,
+                    label: 'Удалить',
                     onPressed: () => _delete(selected),
                   ),
                 ),
@@ -316,10 +403,21 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
-                      child: Text(
-                        'Папка пуста. Положите файлы в Music/Hydra/${widget.playlist.name} '
-                        'и нажмите «Обновить».',
-                        textAlign: TextAlign.center,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Папка пуста. Положите файлы в Music/Hydra/${widget.playlist.name} '
+                            'и нажмите «Обновить».',
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Удалить плейлист'),
+                            onPressed: _deletePlaylist,
+                          ),
+                        ],
                       ),
                     ),
                   )

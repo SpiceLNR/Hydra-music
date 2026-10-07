@@ -103,4 +103,32 @@ void main() {
     );
     expect(find.textContaining('Сейчас играет'), findsNothing);
   });
+
+  testWidgets('MetroAction shows its label and reacts to a tap', (tester) async {
+    var taps = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              Expanded(
+                child: MetroAction(icon: Icons.edit, label: 'Название', onPressed: () => taps++),
+              ),
+              const Expanded(
+                child: MetroAction(icon: Icons.delete, label: 'Удалить', onPressed: null),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.text('Название'), findsOneWidget);
+    await tester.tap(find.text('Название'));
+    await tester.pump();
+    expect(taps, 1);
+    // кнопка без действия не падает при нажатии
+    await tester.tap(find.text('Удалить'));
+    await tester.pump();
+    expect(taps, 1);
+  });
 }

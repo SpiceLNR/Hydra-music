@@ -5,14 +5,15 @@
 //!  * перемещение файла между папками распознаётся по хэшу содержимого, поэтому
 //!    перенос в Проводнике и переименование папки не создают «новых» треков;
 //!  * теги читаются ТОЛЬКО при добавлении нового файла;
-//!  * удаление из приложения кладёт файл в `.hydra/trash/` (30 дней);
+//!  * удаление из приложения кладёт файл в скрытую папку `.trash/<id>/` рядом с плейлистами
+//!    (30 дней); рядом лежит `item.json`, по нему корзина восстанавливается после переустановки;
 //!  * скрытый `.<Плейлист>.json` в папке плейлиста перегенерируется из журнала.
 //!
 //! Внутренняя папка `.hydra/` и любые имена с точкой в начале сканером игнорируются.
 
 use crate::clock::{Clock, Hlc};
 use crate::journal::{self, Kind, TrackState};
-use crate::{db, naming, Error, Result};
+use crate::{db, naming, tags, Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
@@ -24,6 +25,10 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 pub const INTERNAL_DIR: &str = ".hydra";
+/// Корзина: скрытая папка в корне библиотеки (переживает переустановку приложения).
+pub const TRASH_DIR: &str = ".trash";
+const TRASH_META: &str = "item.json";
+const PLAYLIST_ORDER_FILE: &str = ".playlists.json";
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PlaylistInfo {
@@ -63,6 +68,7 @@ struct PlaylistRow {
     id: String,
     dir_name: String,
     deleted: bool,
+    sort_order: i64,
 }
 
 pub struct Library {
@@ -75,8 +81,11 @@ pub struct Library {
 impl Library {
     /// `root` - папка Hydra (Music/Hydra), `db_path` - база в приватной папке приложения.
     pub fn open(root: &Path, db_path: &Path, device_id: &str, now_ms: u64) -> Result<Self> {
-        fs::create_dir_all(root.join(INTERNAL_DIR).join("trash"))?;
+        fs::create_dir_all(root.join(INTERNAL_DIR))?;
+        fs::create_dir_all(root.join(TRASH_DIR))?;
         hide(&root.join(INTERNAL_DIR));
+        hide(&root.join(TRASH_DIR));
+        migrate_legacy_trash(root);
         let conn = db::open(db_path)?;
         let mut clock = Clock::new(device_id);
         // Часы не должны откатываться после перезапуска.
@@ -94,17 +103,20 @@ impl Library {
     // ---------- чтение ----------
 
     pub fn playlists(&self) -> Result<Vec<PlaylistInfo>> {
-        let mut rows: Vec<PlaylistInfo> = Vec::new();
+        let mut rows: Vec<(i64, PlaylistInfo)> = Vec::new();
         for p in self.all_playlists()?.into_iter().filter(|p| !p.deleted) {
             let n: i64 = self.conn.query_row(
                 "SELECT COUNT(*) FROM tracks WHERE playlist_id = ?1 AND deleted = 0",
                 [&p.id],
                 |r| r.get(0),
             )?;
-            rows.push(PlaylistInfo { playlist_id: p.id, name: p.dir_name, track_count: n as usize });
+            rows.push((
+                p.sort_order,
+                PlaylistInfo { playlist_id: p.id, name: p.dir_name, track_count: n as usize },
+            ));
         }
-        rows.sort_by_key(|p| naming::fold_key(&p.name));
-        Ok(rows)
+        rows.sort_by_key(|(order, p)| (*order, naming::fold_key(&p.name)));
+        Ok(rows.into_iter().map(|(_, p)| p).collect())
     }
 
     pub fn tracks(&self, playlist_id: &str) -> Result<Vec<TrackInfo>> {
@@ -147,7 +159,11 @@ impl Library {
         let Ok(tagged) = lofty::read_from_path(&path) else { return Ok(None) };
         let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
         Ok(tag.and_then(|t| {
-            t.pictures().first().map(|p| {
+            let front = t
+                .pictures()
+                .iter()
+                .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront);
+            front.or_else(|| t.pictures().first()).map(|p| {
                 let mime = p
                     .mime_type()
                     .map(|m| m.as_str().to_string())
@@ -175,7 +191,144 @@ impl Library {
         fs::create_dir_all(self.root.join(&dir_name))?;
         let id = self.insert_playlist(&dir_name, now_ms)?;
         self.write_manifest(&id)?;
+        self.write_playlist_order()?;
         Ok(PlaylistInfo { playlist_id: id, name: dir_name, track_count: 0 })
+    }
+
+    /// Переименовывает плейлист: меняется и папка на диске, и скрытый json.
+    pub fn rename_playlist(&mut self, playlist_id: &str, new_name: &str) -> Result<PlaylistInfo> {
+        let row = self
+            .all_playlists()?
+            .into_iter()
+            .find(|p| p.id == playlist_id && !p.deleted)
+            .ok_or_else(|| Error::Invalid(format!("playlist {playlist_id} not found")))?;
+        let mut existing: Vec<String> = self
+            .all_playlists()?
+            .into_iter()
+            .filter(|p| !p.deleted && p.id != playlist_id)
+            .map(|p| p.dir_name)
+            .collect();
+        if let Ok(rd) = fs::read_dir(&self.root) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if naming::fold_key(&n) != naming::fold_key(&row.dir_name) {
+                    existing.push(n);
+                }
+            }
+        }
+        let new_dir = naming::unique_name(new_name, &existing);
+        if new_dir != row.dir_name {
+            let old_path = self.root.join(&row.dir_name);
+            let new_path = self.root.join(&new_dir);
+            if old_path.is_dir() {
+                fs::rename(&old_path, &new_path)?;
+            } else {
+                fs::create_dir_all(&new_path)?;
+            }
+            // старый скрытый json переехал вместе с папкой: убираем его, пишем новый
+            let _ = fs::remove_file(new_path.join(naming::playlist_manifest_name(&row.dir_name)));
+            self.conn.execute(
+                "UPDATE playlists SET dir_name = ?2 WHERE playlist_id = ?1",
+                params![playlist_id, new_dir],
+            )?;
+            self.write_manifest(playlist_id)?;
+            self.write_playlist_order()?;
+            self.refresh_trash_meta_for_playlist(playlist_id);
+        }
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tracks WHERE playlist_id = ?1 AND deleted = 0",
+            [playlist_id],
+            |r| r.get(0),
+        )?;
+        Ok(PlaylistInfo { playlist_id: playlist_id.to_string(), name: new_dir, track_count: n as usize })
+    }
+
+    /// Удаляет плейлист, только если в нём нет треков и в папке нет чужих файлов.
+    pub fn delete_playlist(&mut self, playlist_id: &str) -> Result<()> {
+        let row = self
+            .all_playlists()?
+            .into_iter()
+            .find(|p| p.id == playlist_id && !p.deleted)
+            .ok_or_else(|| Error::Invalid(format!("playlist {playlist_id} not found")))?;
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tracks WHERE playlist_id = ?1 AND deleted = 0",
+            [playlist_id],
+            |r| r.get(0),
+        )?;
+        if n > 0 {
+            return Err(Error::Invalid("в плейлисте есть треки: сначала удалите или перенесите их".into()));
+        }
+        let dir = self.root.join(&row.dir_name);
+        if dir.is_dir() {
+            // допустимы только скрытые служебные файлы (манифест)
+            for e in fs::read_dir(&dir)? {
+                let e = e?;
+                if !e.file_name().to_string_lossy().starts_with('.') {
+                    return Err(Error::Invalid(
+                        "в папке плейлиста остались посторонние файлы; приложение их не удаляет".into(),
+                    ));
+                }
+            }
+            fs::remove_dir_all(&dir)?;
+        }
+        self.conn.execute("UPDATE playlists SET deleted = 1 WHERE playlist_id = ?1", [playlist_id])?;
+        self.write_playlist_order()?;
+        Ok(())
+    }
+
+    /// Ставит плейлист на позицию `new_index` (0 - первый).
+    pub fn reorder_playlist(&mut self, playlist_id: &str, new_index: usize) -> Result<()> {
+        let mut ids: Vec<String> = self.playlists()?.into_iter().map(|p| p.playlist_id).collect();
+        let pos = ids
+            .iter()
+            .position(|i| i == playlist_id)
+            .ok_or_else(|| Error::Invalid(format!("playlist {playlist_id} not found")))?;
+        let id = ids.remove(pos);
+        ids.insert(new_index.min(ids.len()), id);
+        for (i, id) in ids.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE playlists SET sort_order = ?2 WHERE playlist_id = ?1",
+                params![id, i as i64 + 1],
+            )?;
+        }
+        self.write_playlist_order()
+    }
+
+    /// Меняет название трека. Название записывается и в теги файла, если формат это
+    /// позволяет; иначе оно хранится только в приложении. Возвращает `true`, если теги записаны.
+    pub fn rename_track(&mut self, track_id: &str, title: &str, now_ms: u64) -> Result<bool> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(Error::Invalid("название не может быть пустым".into()));
+        }
+        if title.chars().count() > 200 {
+            return Err(Error::Invalid("название слишком длинное".into()));
+        }
+        let t = self.live_track(track_id)?;
+        let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
+        let written = path.is_file() && tags::write_title(&path, title, &self.tmp_dir()).is_ok();
+        let mut payload = json!({ "title": title });
+        if written {
+            payload["sha256"] = json!(sha256_file(&path)?);
+        }
+        self.record(now_ms, Kind::Edit, track_id, payload)?;
+        self.write_manifest(&t.playlist_id)?;
+        Ok(written)
+    }
+
+    /// Заменяет обложку: картинка уменьшается, сжимается в jpeg и встраивается в файл.
+    pub fn set_cover(&mut self, track_id: &str, image_path: &Path, now_ms: u64) -> Result<()> {
+        let t = self.live_track(track_id)?;
+        let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
+        if !path.is_file() {
+            return Err(Error::Invalid("файла трека нет на диске".into()));
+        }
+        let jpeg = tags::prepare_cover(image_path)?;
+        tags::write_cover(&path, &jpeg, &self.tmp_dir())?;
+        let payload = json!({ "sha256": sha256_file(&path)? });
+        self.record(now_ms, Kind::Edit, track_id, payload)?;
+        self.write_manifest(&t.playlist_id)?;
+        Ok(())
     }
 
     /// Физически переносит файл в другой плейлист и пишет операцию `move`.
@@ -201,7 +354,7 @@ impl Library {
         Ok(())
     }
 
-    /// Удаление из приложения: файл уходит в `.hydra/trash/<id>/` на 30 дней.
+    /// Удаление из приложения: файл уходит в `.trash/<id>/` на 30 дней.
     pub fn delete_track(&mut self, track_id: &str, now_ms: u64) -> Result<()> {
         let t = self.live_track(track_id)?;
         let src = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
@@ -211,6 +364,7 @@ impl Library {
             fs::rename(&src, tdir.join(&t.file_name))?;
         }
         self.record(now_ms, Kind::Delete, track_id, json!({}))?;
+        self.write_trash_meta(track_id);
         self.write_manifest(&t.playlist_id)?;
         Ok(())
     }
@@ -230,7 +384,7 @@ impl Library {
         fs::create_dir_all(&pdir)?;
         let new_name = naming::unique_file_name(&t.file_name, &list_names(&pdir));
         fs::rename(&saved, pdir.join(&new_name))?;
-        let _ = fs::remove_dir(self.trash_dir(track_id));
+        let _ = fs::remove_dir_all(self.trash_dir(track_id));
         self.record(
             now_ms,
             Kind::Move,
@@ -257,6 +411,27 @@ impl Library {
         for id in &ids {
             let _ = fs::remove_dir_all(self.trash_dir(id));
             journal::forget_trashed(&self.conn, id)?;
+        }
+        Ok(ids.len())
+    }
+
+    /// Стирает всё содержимое корзины. Записи об удалении в журнале остаются.
+    /// Возвращает число стёртых треков.
+    pub fn empty_trash(&mut self) -> Result<usize> {
+        let mut stmt = self.conn.prepare("SELECT track_id FROM trash")?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for id in &ids {
+            let _ = fs::remove_dir_all(self.trash_dir(id));
+            journal::forget_trashed(&self.conn, id)?;
+        }
+        // остатки без записи в базе (например, после сбоя)
+        if let Ok(rd) = fs::read_dir(self.root.join(TRASH_DIR)) {
+            for e in rd.flatten() {
+                let _ = fs::remove_dir_all(e.path());
+            }
         }
         Ok(ids.len())
     }
@@ -294,6 +469,9 @@ impl Library {
             let pid = self.ensure_playlist(&name, now_ms, &mut report)?;
             dirs.push((pid, entry.path()));
         }
+
+        // 1b. Корзина-папка: подхватываем то, что осталось после переустановки
+        self.recover_trash(now_ms)?;
 
         // 2. Файлы в папках: известные, новые, и какие известные пропали
         let live = journal::live_tracks(&self.conn)?;
@@ -384,6 +562,7 @@ impl Library {
         for (pid, _) in &dirs {
             self.write_manifest(pid)?;
         }
+        self.write_playlist_order()?;
         Ok(report)
     }
 
@@ -409,7 +588,155 @@ impl Library {
     }
 
     fn trash_dir(&self, track_id: &str) -> PathBuf {
-        self.root.join(INTERNAL_DIR).join("trash").join(track_id)
+        self.root.join(TRASH_DIR).join(track_id)
+    }
+
+    fn tmp_dir(&self) -> PathBuf {
+        self.root.join(INTERNAL_DIR).join("tmp")
+    }
+
+    /// Пишет `item.json` рядом с файлом в корзине. Ошибка не критична: это запасная копия
+    /// сведений для восстановления после переустановки.
+    fn write_trash_meta(&self, track_id: &str) {
+        let _ = self.try_write_trash_meta(track_id);
+    }
+
+    fn try_write_trash_meta(&self, track_id: &str) -> Result<()> {
+        let Some(t) = journal::get_track(&self.conn, track_id)? else { return Ok(()) };
+        let deleted_ms: Option<i64> = self
+            .conn
+            .query_row("SELECT deleted_ms FROM trash WHERE track_id = ?1", [track_id], |r| r.get(0))
+            .optional()?;
+        let Some(deleted_ms) = deleted_ms else { return Ok(()) };
+        let dir = self.trash_dir(track_id);
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        let playlist_name: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT dir_name FROM playlists WHERE playlist_id = ?1",
+                [&t.playlist_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let meta = json!({
+            "version": 1,
+            "track_id": t.track_id,
+            "file_name": t.file_name,
+            "sha256": t.sha256,
+            "playlist_name": playlist_name.unwrap_or_default(),
+            "title": t.title,
+            "artist": t.artist,
+            "deleted_ms": deleted_ms,
+        });
+        fs::write(dir.join(TRASH_META), serde_json::to_string_pretty(&meta)?)?;
+        Ok(())
+    }
+
+    fn refresh_trash_meta_for_playlist(&self, playlist_id: &str) {
+        let ids: Vec<String> = self
+            .conn
+            .prepare("SELECT track_id FROM trash WHERE playlist_id = ?1")
+            .and_then(|mut s| {
+                s.query_map([playlist_id], |r| r.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        for id in ids {
+            self.write_trash_meta(&id);
+        }
+    }
+
+    /// После переустановки база пуста, а `.trash/` осталась. Каждая папка с `item.json`
+    /// превращается обратно в «добавлен, затем удалён» с прежней датой удаления.
+    /// Заодно дописывает `item.json` тем записям, у которых его ещё нет (старая корзина).
+    fn recover_trash(&mut self, now_ms: u64) -> Result<()> {
+        let trash_root = self.root.join(TRASH_DIR);
+        let Ok(rd) = fs::read_dir(&trash_root) else { return Ok(()) };
+        let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        dirs.sort();
+        for dir in dirs {
+            let Some(id) = dir.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
+            if Uuid::parse_str(&id).is_err() {
+                continue;
+            }
+            if journal::get_track(&self.conn, &id)?.is_some() {
+                if !dir.join(TRASH_META).exists() {
+                    self.write_trash_meta(&id);
+                }
+                continue;
+            }
+            // неизвестный базе трек: восстанавливаем по item.json
+            let Ok(text) = fs::read_to_string(dir.join(TRASH_META)) else { continue };
+            let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let Some(file_name) = meta["file_name"].as_str().map(|s| s.to_string()) else { continue };
+            // имя файла из чужого json: только простое имя, без путей
+            if file_name.contains(['/', '\\']) || file_name.starts_with('.') || !dir.join(&file_name).is_file() {
+                continue;
+            }
+            let playlist_name = meta["playlist_name"].as_str().unwrap_or("").to_string();
+            let playlist_name = if playlist_name.trim().is_empty() {
+                "Restored".to_string()
+            } else {
+                naming::sanitize(&playlist_name)
+            };
+            let pid = self.find_or_create_playlist(&playlist_name, now_ms)?;
+            let sha = meta["sha256"].as_str().unwrap_or("").to_string();
+            let title = meta["title"].as_str().map(|s| s.to_string());
+            let artist = meta["artist"].as_str().map(|s| s.to_string());
+            let key = journal::append_key(&self.conn, &pid)?;
+            let payload = journal::add_payload(&pid, &file_name, &sha, title.as_deref(), artist.as_deref(), &key);
+            self.record(now_ms, Kind::Add, &id, payload)?;
+            self.record(now_ms, Kind::Delete, &id, json!({}))?;
+            if let Some(ms) = meta["deleted_ms"].as_i64() {
+                self.conn.execute("UPDATE trash SET deleted_ms = ?2 WHERE track_id = ?1", params![id, ms])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Плейлист по имени (без учёта регистра). Если такого нет, создаёт запись помеченной
+    /// удалённой: папку заново создаёт `restore_track`, когда трек вернут из корзины.
+    fn find_or_create_playlist(&mut self, name: &str, now_ms: u64) -> Result<String> {
+        let key = naming::fold_key(name);
+        let found = self
+            .all_playlists()?
+            .into_iter()
+            .filter(|p| naming::fold_key(&p.dir_name) == key)
+            .min_by_key(|p| p.deleted);
+        if let Some(p) = found {
+            return Ok(p.id);
+        }
+        let id = self.insert_playlist(name, now_ms)?;
+        self.conn.execute("UPDATE playlists SET deleted = 1 WHERE playlist_id = ?1", [&id])?;
+        Ok(id)
+    }
+
+    /// Порядок плейлистов в скрытом `.playlists.json`: после переустановки он возвращается.
+    fn write_playlist_order(&self) -> Result<()> {
+        let names: Vec<String> = self.playlists()?.into_iter().map(|p| p.name).collect();
+        let content = serde_json::to_string_pretty(&json!({ "version": 1, "order": names }))?;
+        let path = self.root.join(PLAYLIST_ORDER_FILE);
+        if fs::read_to_string(&path).ok().as_deref() == Some(content.as_str()) {
+            return Ok(());
+        }
+        let _ = fs::remove_file(&path);
+        fs::write(&path, content)?;
+        hide(&path);
+        Ok(())
+    }
+
+    fn saved_playlist_order(&self) -> Vec<String> {
+        fs::read_to_string(self.root.join(PLAYLIST_ORDER_FILE))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                v["order"].as_array().map(|a| {
+                    a.iter().filter_map(|x| x.as_str().map(|s| naming::fold_key(s))).collect()
+                })
+            })
+            .unwrap_or_default()
     }
 
     fn playlist_dir(&self, playlist_id: &str) -> Result<PathBuf> {
@@ -428,13 +755,14 @@ impl Library {
     fn all_playlists(&self) -> Result<Vec<PlaylistRow>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT playlist_id, dir_name, deleted FROM playlists ORDER BY dir_name")?;
+            .prepare("SELECT playlist_id, dir_name, deleted, sort_order FROM playlists ORDER BY dir_name")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(PlaylistRow {
                     id: r.get(0)?,
                     dir_name: r.get(1)?,
                     deleted: r.get::<_, i32>(2)? != 0,
+                    sort_order: r.get(3)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -444,9 +772,22 @@ impl Library {
     fn insert_playlist(&mut self, dir_name: &str, now_ms: u64) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let hlc = self.clock.tick(now_ms).encode();
+        // место в списке: как в сохранённом `.playlists.json`, иначе в конец
+        let saved = self.saved_playlist_order();
+        let sort_order: i64 = match saved.iter().position(|n| *n == naming::fold_key(dir_name)) {
+            Some(i) => i as i64 + 1,
+            None => {
+                let max: i64 = self.conn.query_row(
+                    "SELECT COALESCE(MAX(sort_order), 0) FROM playlists",
+                    [],
+                    |r| r.get(0),
+                )?;
+                max.max(saved.len() as i64) + 1
+            }
+        };
         self.conn.execute(
-            "INSERT INTO playlists(playlist_id, dir_name, deleted, hlc) VALUES (?1, ?2, 0, ?3)",
-            params![id, dir_name, hlc],
+            "INSERT INTO playlists(playlist_id, dir_name, deleted, hlc, sort_order) VALUES (?1, ?2, 0, ?3, ?4)",
+            params![id, dir_name, hlc, sort_order],
         )?;
         Ok(id)
     }
@@ -494,6 +835,19 @@ impl Library {
         hide(&path);
         Ok(())
     }
+}
+
+/// Старая корзина лежала в `.hydra/trash/<id>/`: переносим её в `.trash/`.
+fn migrate_legacy_trash(root: &Path) {
+    let old = root.join(INTERNAL_DIR).join("trash");
+    let Ok(rd) = fs::read_dir(&old) else { return };
+    for e in rd.flatten() {
+        let target = root.join(TRASH_DIR).join(e.file_name());
+        if !target.exists() {
+            let _ = fs::rename(e.path(), target);
+        }
+    }
+    let _ = fs::remove_dir(&old);
 }
 
 fn to_info(t: &TrackState, dir: &Path) -> TrackInfo {
@@ -748,7 +1102,7 @@ mod tests {
 
         lib.delete_track(&id, T0 + 2).unwrap();
         assert!(!lib.root().join("Rock").join("a.mp3").exists());
-        assert!(lib.root().join(INTERNAL_DIR).join("trash").join(&id).join("a.mp3").exists());
+        assert!(lib.root().join(TRASH_DIR).join(&id).join("a.mp3").exists());
         assert_eq!(lib.trash_items().unwrap().len(), 1);
         assert!(lib.tracks(&rock).unwrap().is_empty());
         // скан не воскрешает и не дублирует удалённое
@@ -774,7 +1128,7 @@ mod tests {
         lib.delete_track(&id, T0 + 2).unwrap();
         lib.purge_track(&id).unwrap();
         assert!(lib.trash_items().unwrap().is_empty());
-        assert!(!lib.root().join(INTERNAL_DIR).join("trash").join(&id).exists());
+        assert!(!lib.root().join(TRASH_DIR).join(&id).exists());
         assert!(lib.restore_track(&id, T0 + 3).is_err());
         // повторный скан не воскрешает стёртый трек
         assert_eq!(lib.scan(T0 + 4).unwrap(), ScanReport::default());
@@ -793,7 +1147,7 @@ mod tests {
         let day = 24 * 3600 * 1000u64;
         assert_eq!(lib.purge_expired_trash(T0 + 10 * day).unwrap(), 0);
         assert_eq!(lib.purge_expired_trash(T0 + 31 * day).unwrap(), 1);
-        assert!(!lib.root().join(INTERNAL_DIR).join("trash").join(&id).exists());
+        assert!(!lib.root().join(TRASH_DIR).join(&id).exists());
         assert!(lib.restore_track(&id, T0 + 32 * day).is_err());
     }
 
@@ -847,5 +1201,253 @@ mod tests {
         put(&lib, "Rock", "b.mp3", "bbb");
         lib.scan(T0 + 1).unwrap();
         assert_eq!(names(&lib, "Rock"), ["a.mp3", "b.mp3"]);
+    }
+
+    fn tiny_mp3() -> Vec<u8> {
+        // 20 одинаковых тихих кадров MPEG-1 Layer III, 128 кбит/с, 44,1 кГц (по 417 байт)
+        let mut v = Vec::new();
+        for _ in 0..20 {
+            v.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
+            v.extend(std::iter::repeat(0u8).take(413));
+        }
+        v
+    }
+
+    fn put_bytes(lib: &Library, playlist: &str, file: &str, bytes: &[u8]) -> PathBuf {
+        let dir = lib.root().join(playlist);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(file);
+        fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    fn reopen(tmp: &TempDir, db: &str, now: u64) -> Library {
+        Library::open(&tmp.path().join("Hydra"), &tmp.path().join(db), "dev-a", now).unwrap()
+    }
+
+    fn playlist_names(lib: &Library) -> Vec<String> {
+        lib.playlists().unwrap().into_iter().map(|p| p.name).collect()
+    }
+
+    #[test]
+    fn rename_playlist_moves_folder_and_manifest() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+
+        let r = lib.rename_playlist(&rock, "Hard/Rock").unwrap();
+        assert_eq!(r.name, "Hard_Rock");
+        assert!(!lib.root().join("Rock").exists());
+        assert!(lib.root().join("Hard_Rock").join("a.mp3").exists());
+        assert!(lib.root().join("Hard_Rock").join(".Hard_Rock.json").exists());
+        assert!(!lib.root().join("Hard_Rock").join(".Rock.json").exists());
+        // треки и их UUID на месте, повторный скан ничего не меняет
+        assert_eq!(lib.tracks(&rock).unwrap()[0].track_id, id);
+        assert_eq!(lib.scan(T0 + 2).unwrap(), ScanReport::default());
+        assert_eq!(playlist_names(&lib), ["Hard_Rock"]);
+    }
+
+    #[test]
+    fn rename_playlist_avoids_clashes() {
+        let (_t, mut lib) = setup();
+        lib.create_playlist("Rock", T0 + 1).unwrap();
+        let jazz = lib.create_playlist("Jazz", T0 + 2).unwrap();
+        let r = lib.rename_playlist(&jazz.playlist_id, "rock").unwrap();
+        assert_eq!(r.name, "rock (2)");
+        // тот же регистр/имя: ничего не ломается
+        let again = lib.rename_playlist(&jazz.playlist_id, "rock (2)").unwrap();
+        assert_eq!(again.name, "rock (2)");
+    }
+
+    #[test]
+    fn playlists_can_be_reordered_and_order_survives_reinstall() {
+        let (t, mut lib) = setup();
+        lib.create_playlist("A", T0 + 1).unwrap();
+        lib.create_playlist("B", T0 + 2).unwrap();
+        let c = lib.create_playlist("C", T0 + 3).unwrap();
+        assert_eq!(playlist_names(&lib), ["A", "B", "C"]);
+        lib.reorder_playlist(&c.playlist_id, 0).unwrap();
+        assert_eq!(playlist_names(&lib), ["C", "A", "B"]);
+
+        // «переустановка»: новая база при той же папке Hydra
+        drop(lib);
+        let mut lib2 = reopen(&t, "fresh.db", T0 + 10);
+        lib2.scan(T0 + 11).unwrap();
+        assert_eq!(playlist_names(&lib2), ["C", "A", "B"]);
+    }
+
+    #[test]
+    fn playlist_can_be_deleted_only_when_empty() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Jazz", "z.mp3", "zzz");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        assert!(lib.delete_playlist(&rock).is_err(), "с треками удалять нельзя");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+        lib.delete_track(&id, T0 + 2).unwrap();
+        lib.delete_playlist(&rock).unwrap();
+        assert!(!lib.root().join("Rock").exists());
+        assert_eq!(playlist_names(&lib), ["Jazz"]);
+        assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
+        // трек из корзины возвращает и плейлист
+        lib.restore_track(&id, T0 + 4).unwrap();
+        assert_eq!(playlist_names(&lib), ["Jazz", "Rock"]);
+        assert!(lib.root().join("Rock").join("a.mp3").exists());
+    }
+
+    #[test]
+    fn playlist_with_foreign_files_is_not_deleted() {
+        let (_t, mut lib) = setup();
+        let p = lib.create_playlist("Misc", T0 + 1).unwrap();
+        fs::write(lib.root().join("Misc").join("notes.txt"), "hi").unwrap();
+        assert!(lib.delete_playlist(&p.playlist_id).is_err());
+        assert!(lib.root().join("Misc").join("notes.txt").exists());
+    }
+
+    #[test]
+    fn trash_lives_in_hidden_folder_and_survives_reinstall() {
+        let (t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Rock", "b.mp3", "bbb");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let a = lib.tracks(&rock).unwrap()[0].track_id.clone();
+        lib.delete_track(&a, T0 + 2).unwrap();
+        assert!(lib.root().join(TRASH_DIR).join(&a).join("a.mp3").exists());
+        assert!(lib.root().join(TRASH_DIR).join(&a).join("item.json").exists());
+
+        // «переустановка»: база новая, папка Hydra та же
+        drop(lib);
+        let mut lib2 = reopen(&t, "fresh.db", T0 + 100);
+        lib2.scan(T0 + 101).unwrap();
+        let items = lib2.trash_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].track_id, a, "тот же UUID");
+        assert_eq!(items[0].title, "a");
+        assert_eq!(items[0].deleted_ms, (T0 + 2) as i64, "дата удаления сохранилась");
+        // повторный скан ничего не дублирует, трек из корзины не воскресает сам
+        assert_eq!(lib2.scan(T0 + 102).unwrap(), ScanReport::default());
+        assert_eq!(names(&lib2, "Rock"), ["b.mp3"]);
+        // и его можно вернуть
+        lib2.restore_track(&a, T0 + 103).unwrap();
+        assert!(lib2.root().join("Rock").join("a.mp3").exists());
+        assert!(lib2.trash_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn trash_of_a_vanished_playlist_is_recovered_too() {
+        let (t, mut lib) = setup();
+        put(&lib, "Old", "a.mp3", "aaa");
+        put(&lib, "Keep", "k.mp3", "kkk");
+        lib.scan(T0 + 1).unwrap();
+        let old = playlist_id(&lib, "Old");
+        let a = lib.tracks(&old).unwrap()[0].track_id.clone();
+        lib.delete_track(&a, T0 + 2).unwrap();
+        lib.delete_playlist(&old).unwrap();
+
+        drop(lib);
+        let mut lib2 = reopen(&t, "fresh.db", T0 + 100);
+        lib2.scan(T0 + 101).unwrap();
+        assert_eq!(playlist_names(&lib2), ["Keep"]);
+        assert_eq!(lib2.trash_items().unwrap().len(), 1);
+        lib2.restore_track(&a, T0 + 102).unwrap();
+        assert_eq!(playlist_names(&lib2), ["Keep", "Old"]);
+        assert!(lib2.root().join("Old").join("a.mp3").exists());
+    }
+
+    #[test]
+    fn legacy_trash_is_migrated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Hydra");
+        let id = Uuid::new_v4().to_string();
+        let old = root.join(INTERNAL_DIR).join("trash").join(&id);
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("x.mp3"), "xxx").unwrap();
+        let _lib = Library::open(&root, &tmp.path().join("h.db"), "dev-a", T0).unwrap();
+        assert!(root.join(TRASH_DIR).join(&id).join("x.mp3").exists());
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn empty_trash_erases_everything() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Rock", "b.mp3", "bbb");
+        put(&lib, "Rock", "c.mp3", "ccc");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let ids: Vec<String> = lib.tracks(&rock).unwrap().into_iter().map(|t| t.track_id).collect();
+        lib.delete_track(&ids[0], T0 + 2).unwrap();
+        lib.delete_track(&ids[1], T0 + 3).unwrap();
+        assert_eq!(lib.empty_trash().unwrap(), 2);
+        assert!(lib.trash_items().unwrap().is_empty());
+        assert!(fs::read_dir(lib.root().join(TRASH_DIR)).unwrap().next().is_none());
+        assert_eq!(names(&lib, "Rock"), ["c.mp3"]);
+        assert_eq!(lib.scan(T0 + 4).unwrap(), ScanReport::default());
+    }
+
+    #[test]
+    fn rename_track_in_a_file_without_tags_keeps_title_in_app() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "not really an mp3");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+        assert!(lib.rename_track(&id, "   ", T0 + 2).is_err());
+        let written = lib.rename_track(&id, "  Новое имя ", T0 + 2).unwrap();
+        assert!(!written, "в нечитаемый файл теги не пишутся");
+        assert_eq!(lib.tracks(&rock).unwrap()[0].title, "Новое имя");
+        // файл не тронут, лишних копий нет
+        assert_eq!(fs::read_to_string(lib.root().join("Rock").join("a.mp3")).unwrap(), "not really an mp3");
+        assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
+    }
+
+    #[test]
+    fn rename_track_writes_the_title_into_a_real_mp3() {
+        use lofty::prelude::*;
+        let (_t, mut lib) = setup();
+        let path = put_bytes(&lib, "Rock", "a.mp3", &tiny_mp3());
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+
+        assert!(lib.rename_track(&id, "Hydra Song", T0 + 2).unwrap(), "теги должны записаться");
+        let tagged = lofty::read_from_path(&path).unwrap();
+        let tag = tagged.primary_tag().or_else(|| tagged.first_tag()).unwrap();
+        assert_eq!(tag.title().as_deref(), Some("Hydra Song"));
+        assert_eq!(lib.tracks(&rock).unwrap()[0].title, "Hydra Song");
+        // скан видит тот же файл (хэш обновлён), а не «удалён + добавлен»
+        assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
+        assert!(!lib.root().join(INTERNAL_DIR).join("tmp").read_dir().map(|mut d| d.next().is_some()).unwrap_or(false));
+    }
+
+    #[test]
+    fn set_cover_embeds_the_picture_in_the_file() {
+        let (t, mut lib) = setup();
+        put_bytes(&lib, "Rock", "a.mp3", &tiny_mp3());
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+        assert!(lib.cover(&id).unwrap().is_none());
+
+        let png = t.path().join("pic.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([200, 30, 30])).save(&png).unwrap();
+        lib.set_cover(&id, &png, T0 + 2).unwrap();
+        let (mime, bytes) = lib.cover(&id).unwrap().expect("обложка должна появиться");
+        assert!(mime.contains("jpeg"), "{mime}");
+        assert!(bytes.len() > 100);
+        assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
+
+        // повторная замена не копит обложки
+        lib.set_cover(&id, &png, T0 + 4).unwrap();
+        assert!(lib.cover(&id).unwrap().is_some());
+        // не картинка - понятная ошибка, файл цел
+        let bad = t.path().join("bad.png");
+        fs::write(&bad, "nope").unwrap();
+        assert!(lib.set_cover(&id, &bad, T0 + 5).is_err());
+        assert!(lib.cover(&id).unwrap().is_some());
     }
 }

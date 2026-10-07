@@ -4,7 +4,7 @@ use crate::Result;
 use rusqlite::Connection;
 use std::path::Path;
 
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -76,10 +76,24 @@ pub fn open_in_memory() -> Result<Connection> {
 fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
     conn.execute_batch(SCHEMA)?;
+    migrate(conn)?;
     conn.execute(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
+        "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
         [SCHEMA_VERSION.to_string()],
     )?;
+    Ok(())
+}
+
+/// Обновление старых баз. Версия 2: порядок плейлистов (`playlists.sort_order`).
+fn migrate(conn: &Connection) -> Result<()> {
+    let has_sort: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('playlists') WHERE name = 'sort_order'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_sort == 0 {
+        conn.execute_batch("ALTER TABLE playlists ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;")?;
+    }
     Ok(())
 }
 

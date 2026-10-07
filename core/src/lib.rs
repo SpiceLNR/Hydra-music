@@ -10,6 +10,7 @@ pub mod journal;
 pub mod library;
 pub mod naming;
 pub mod order;
+pub mod tags;
 
 pub use error::{Error, Result};
 

@@ -38,6 +38,16 @@ fn to_json<T: Serialize>(r: hydra_core::Result<T>) -> Result<Value, String> {
     serde_json::to_value(v).map_err(es)
 }
 
+/// Быстрый некриптографический хэш (FNV-1a) для имени файла в кэше обложек.
+fn fnv1a(data: &[u8]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in data {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
 fn arg_str(args: &Value, key: &str) -> Result<String, String> {
     args[key]
         .as_str()
@@ -108,6 +118,29 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
         )),
         "purge_track" => to_json(st.lib.purge_track(&arg_str(args, "track_id")?)),
         "purge_trash" => to_json(st.lib.purge_expired_trash(now_ms())),
+        "empty_trash" => to_json(st.lib.empty_trash()),
+        "rename_playlist" => to_json(
+            st.lib.rename_playlist(&arg_str(args, "playlist_id")?, &arg_str(args, "name")?),
+        ),
+        "delete_playlist" => to_json(st.lib.delete_playlist(&arg_str(args, "playlist_id")?)),
+        "reorder_playlist" => to_json(st.lib.reorder_playlist(
+            &arg_str(args, "playlist_id")?,
+            arg_usize(args, "index")?,
+        )),
+        "rename_track" => {
+            let written = st
+                .lib
+                .rename_track(&arg_str(args, "track_id")?, &arg_str(args, "title")?, now_ms())
+                .map_err(es)?;
+            Ok(json!({ "tag_written": written }))
+        }
+        "set_cover" => {
+            let id = arg_str(args, "track_id")?;
+            st.lib
+                .set_cover(&id, std::path::Path::new(&arg_str(args, "image_path")?), now_ms())
+                .map_err(es)?;
+            Ok(Value::Null)
+        }
         "cover" => {
             let id = arg_str(args, "track_id")?;
             match st.lib.cover(&id).map_err(es)? {
@@ -116,8 +149,22 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
                     let ext = if mime.contains("png") { "png" } else { "jpg" };
                     let dir = st.cache_dir.join("covers");
                     fs::create_dir_all(&dir).map_err(es)?;
-                    let path = dir.join(format!("{id}.{ext}"));
-                    fs::write(&path, &bytes).map_err(es)?;
+                    // В имени есть отпечаток содержимого: после замены обложки путь другой,
+                    // и Flutter не показывает старую картинку из своего кэша.
+                    let name = format!("{id}-{:08x}.{ext}", fnv1a(&bytes));
+                    let path = dir.join(&name);
+                    if !path.exists() {
+                        fs::write(&path, &bytes).map_err(es)?;
+                    }
+                    // прежние версии обложки этого трека больше не нужны
+                    if let Ok(rd) = fs::read_dir(&dir) {
+                        for e in rd.flatten() {
+                            let n = e.file_name().to_string_lossy().to_string();
+                            if n.starts_with(&format!("{id}-")) && n != name {
+                                let _ = fs::remove_file(e.path());
+                            }
+                        }
+                    }
                     Ok(json!({ "path": path.to_string_lossy() }))
                 }
             }
@@ -295,5 +342,30 @@ mod tests {
         );
         assert_eq!(reopened["device_id"], device_id);
         assert_eq!(ok("playlists", json!({})).as_array().unwrap().len(), 2);
+
+        // переименование и порядок плейлистов
+        let renamed = ok("rename_playlist", json!({ "playlist_id": jazz_id, "name": "Blues" }));
+        assert_eq!(renamed["name"], "Blues");
+        assert!(root.join("Blues").is_dir() && !root.join("Jazz").exists());
+        ok("reorder_playlist", json!({ "playlist_id": jazz_id, "index": 0 }));
+        assert_eq!(ok("playlists", json!({}))[0]["name"], "Blues");
+
+        // название трека: в файле-пустышке теги не пишутся, название хранится в приложении
+        let renamed = ok("rename_track", json!({ "track_id": b, "title": "Новое" }));
+        assert_eq!(renamed["tag_written"], false);
+        assert_eq!(ok("tracks", json!({ "playlist_id": rock }))[0]["title"], "Новое");
+        let bad = call_json("set_cover", json!({ "track_id": b, "image_path": "/no/such.png" }));
+        assert_eq!(bad["ok"], false);
+
+        // удаление плейлиста: с треками нельзя, пустой можно
+        let refuse = call_json("delete_playlist", json!({ "playlist_id": rock }));
+        assert_eq!(refuse["ok"], false);
+        ok("delete_playlist", json!({ "playlist_id": jazz_id }));
+        assert_eq!(ok("playlists", json!({})).as_array().unwrap().len(), 1);
+
+        // очистка корзины
+        ok("delete_track", json!({ "track_id": b }));
+        assert_eq!(ok("empty_trash", json!({})), 1);
+        assert!(ok("trash_items", json!({})).as_array().unwrap().is_empty());
     }
 }

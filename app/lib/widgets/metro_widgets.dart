@@ -284,3 +284,53 @@ class _MetroProgressState extends State<MetroProgress> with SingleTickerProvider
     );
   }
 }
+
+/// Компактная кнопка «значок и подпись» для нижней панели действий. Без скруглений.
+/// Помещайте в [Expanded]: подпись сама уменьшается, если не помещается.
+class MetroAction extends StatelessWidget {
+  const MetroAction({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.filled = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  /// Зелёная заливка для главного действия.
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    return Opacity(
+      opacity: enabled ? 1 : 0.4,
+      child: Material(
+        color: filled ? Metro.green : Metro.surface,
+        child: InkWell(
+          onTap: onPressed,
+          child: SizedBox(
+            height: 56,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 22, color: Colors.white),
+                  const SizedBox(height: 2),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(label, style: const TextStyle(fontSize: 12, color: Colors.white)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

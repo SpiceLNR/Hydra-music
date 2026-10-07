@@ -17,6 +17,8 @@ dependencies:
   # Фоновое воспроизведение: служба переднего плана, уведомление, экран блокировки
   audio_service: ^0.18.15
   audio_session: any
+  # выбор картинки для обложки (системная галерея, разрешений не требует)
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:
