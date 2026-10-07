@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hydra_music/desktop/context_menu.dart';
+import 'package:hydra_music/desktop/v_slider.dart';
 import 'package:hydra_music/main.dart';
 import 'package:hydra_music/widgets/metro_widgets.dart';
 import 'package:hydra_music/widgets/now_playing_bar.dart';
@@ -130,5 +132,55 @@ void main() {
     await tester.tap(find.text('Удалить'));
     await tester.pump();
     expect(taps, 1);
+  });
+
+  testWidgets('MetroVSlider: top of the bar is the maximum, bottom is zero', (tester) async {
+    double? last;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              height: 200,
+              child: MetroVSlider(value: 50, onChanged: (v) => last = v),
+            ),
+          ),
+        ),
+      ),
+    );
+    final rect = tester.getRect(find.byType(MetroVSlider));
+    await tester.tapAt(Offset(rect.center.dx, rect.top + 1));
+    await tester.pump();
+    expect(last, greaterThan(95));
+    await tester.tapAt(Offset(rect.center.dx, rect.bottom - 1));
+    await tester.pump();
+    expect(last, lessThan(5));
+  });
+
+  testWidgets('showMetroMenu returns the chosen item', (tester) async {
+    String? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                chosen = await showMetroMenu<String>(context, const Offset(20, 20), const [
+                  MetroMenuItem(value: 'rename', label: 'Название', icon: Icons.edit),
+                  MetroMenuItem(value: 'delete', label: 'Удалить', icon: Icons.delete, danger: true),
+                ]);
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Название'), findsOneWidget);
+    await tester.tap(find.text('Удалить'));
+    await tester.pumpAndSettle();
+    expect(chosen, 'delete');
   });
 }

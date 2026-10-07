@@ -30,6 +30,9 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   bool _askedNotifications = false;
   HydraAudioHandler? _handler;
 
+  /// Громкость 0..100 (на Windows её меняет вертикальная полоса в шторке).
+  double volume = 100;
+
   List<TrackInfo> queue = const [];
   int index = 0;
   bool playing = false;
@@ -43,9 +46,17 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     _handler = await initBackgroundPlayback(this);
   }
 
+  /// Меняет громкость; сохранением занимается интерфейс.
+  Future<void> setVolume(double value) async {
+    volume = value.clamp(0, 100).toDouble();
+    notifyListeners();
+    if (_wired) await _player.setVolume(volume);
+  }
+
   void _wire() {
     if (_wired) return;
     _wired = true;
+    _player.setVolume(volume);
     _player.stream.playing.listen((v) {
       playing = v;
       notifyListeners();

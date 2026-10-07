@@ -1,6 +1,10 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../core_bridge.dart';
+import '../desktop/desktop_settings.dart';
+import '../desktop/dock_controller.dart';
 import '../library_controller.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
@@ -31,6 +35,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          if (Platform.isWindows) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text('Окно (Windows)', style: TextStyle(fontSize: 20)),
+            ),
+            ListenableBuilder(
+              listenable: DesktopSettings.instance,
+              builder: (context, _) {
+                final s = DesktopSettings.instance;
+                Widget side(String label, bool right) {
+                  final selected = s.dockRight == right;
+                  void choose() {
+                    s.setDockRight(right);
+                    DockController.instance.reapply();
+                  }
+
+                  return Expanded(
+                    child: selected
+                        ? ElevatedButton(onPressed: choose, child: Text(label))
+                        : OutlinedButton(onPressed: choose, child: Text(label)),
+                  );
+                }
+
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Сторона закрепления', style: TextStyle(fontSize: 18)),
+                          const SizedBox(height: 8),
+                          Row(children: [side('Слева', false), const SizedBox(width: 8), side('Справа', true)]),
+                        ],
+                      ),
+                    ),
+                    MetroSwitchRow(
+                      title: 'Сворачиваться в полоску при клике вне окна',
+                      value: s.autoCollapse,
+                      onChanged: s.setAutoCollapse,
+                    ),
+                  ],
+                );
+              },
+            ),
+            const Divider(),
+          ],
           MetroSwitchRow(
             title: 'Синхронизировать только по Wi-Fi',
             value: wifiOnly,
