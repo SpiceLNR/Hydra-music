@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'app_messenger.dart';
 import 'audio_engine.dart';
 import 'audio_handler.dart';
+import 'file_probe.dart';
 import 'library_controller.dart';
 import 'models.dart';
 
@@ -101,6 +102,12 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     final t = current;
     final name = t == null ? '' : '«${t.title}» (${t.fileName}): ';
     showAppMessage('Не удалось воспроизвести $name$message');
+    if (t != null) {
+      // дополняем сообщение справкой о файле (есть ли он, размер, начало)
+      probeFile(t.path).then((info) {
+        showAppMessage('Не удалось воспроизвести $name$message\n$info');
+      });
+    }
     _errorStreak++;
     if (_engine.skipOnError && _errorStreak <= 5 && index < queue.length - 1) {
       Future<void>.delayed(const Duration(milliseconds: 300), () => _engine.next());
