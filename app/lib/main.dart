@@ -23,6 +23,10 @@ Future<void> main() async {
   await PlayerService.instance.initBackground();
   hydraLibrary.init(); // не ждём: интерфейс открывается сразу, статус виден на главном экране
   runApp(const HydraApp());
+  if (Platform.isWindows) {
+    // окно показывается только после первого кадра: без белой вспышки при запуске
+    WidgetsBinding.instance.addPostFrameCallback((_) => DockController.instance.reveal());
+  }
 }
 
 class HydraApp extends StatelessWidget {

@@ -54,11 +54,20 @@ class DockController with WindowListener {
     await windowManager.waitUntilReadyToShow(options, () async {
       Win32Frame.makeBorderless(_title);
       await _place(expanded: true);
-      await windowManager.show();
-      await windowManager.focus();
       await windowManager.setSkipTaskbar(true);
+      // окно пока скрыто: показываем его после первого кадра (см. [reveal])
     });
     _ready = true;
+  }
+
+  /// Показывает окно, когда Flutter уже нарисовал первый кадр: иначе на миг видна
+  /// пустая белая рамка. Вызывается из `main` после `runApp`.
+  Future<void> reveal() async {
+    if (!Platform.isWindows || !_ready) return;
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await windowManager.show();
+    await windowManager.focus();
+    await windowManager.setSkipTaskbar(true);
   }
 
   Future<Rect> _workArea() async {
@@ -125,6 +134,8 @@ class DockController with WindowListener {
     try {
       await _place(expanded: false);
       collapsed.value = true;
+      await _setButtonVisible(false);
+      _startEdgeWatch();
     } finally {
       _busy = false;
     }
@@ -135,6 +146,8 @@ class DockController with WindowListener {
     if (!_ready || !collapsed.value || _busy) return;
     _busy = true;
     try {
+      _stopEdgeWatch();
+      await _setButtonVisible(true);
       await _place(expanded: true);
       collapsed.value = false;
       await windowManager.focus();
@@ -151,6 +164,51 @@ class DockController with WindowListener {
       await _place(expanded: !collapsed.value);
     } finally {
       _busy = false;
+    }
+  }
+
+  // ---- кнопка появляется, только когда курсор дошёл до самого края экрана ----
+
+  Timer? _edgeTimer;
+  bool _buttonShown = true;
+  bool _edgeChecking = false;
+
+  /// Кнопка «спрятана»: окно на месте, но невидимо и пропускает мышь сквозь себя.
+  Future<void> _setButtonVisible(bool visible) async {
+    if (_buttonShown == visible) return;
+    _buttonShown = visible;
+    await windowManager.setOpacity(visible ? 1.0 : 0.0);
+    await windowManager.setIgnoreMouseEvents(!visible);
+  }
+
+  void _startEdgeWatch() {
+    _edgeTimer?.cancel();
+    _edgeTimer = Timer.periodic(const Duration(milliseconds: 80), (_) => _checkEdge());
+  }
+
+  void _stopEdgeWatch() {
+    _edgeTimer?.cancel();
+    _edgeTimer = null;
+  }
+
+  Future<void> _checkEdge() async {
+    if (_edgeChecking || _busy || !collapsed.value) return;
+    _edgeChecking = true;
+    try {
+      final p = await screenRetriever.getCursorScreenPoint();
+      final area = await _workArea();
+      final btn = _collapsedRect(area);
+      // расстояние от курсора до края экрана, у которого стоит кнопка
+      final fromEdge = settings.dockRight ? area.right - p.dx : p.dx - area.left;
+      final nearY = p.dy >= btn.top - 30 && p.dy <= btn.bottom + 30;
+      final show = _buttonShown
+          ? fromEdge <= collapsedSize + 24 && nearY // уже видна: держим, пока курсор рядом
+          : fromEdge <= 2 && nearY; // скрыта: появляется только у самого края
+      if (collapsed.value && !_busy) await _setButtonVisible(show);
+    } catch (_) {
+      // не удалось прочитать курсор: оставляем как есть
+    } finally {
+      _edgeChecking = false;
     }
   }
 

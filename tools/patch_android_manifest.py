@@ -195,6 +195,16 @@ def patch_windows() -> int:
         if new != text:
             WIN_MAIN.write_text(new, encoding="utf-8")
             print("Название окна Windows: задано")
+    # Окно не показывается само после первого кадра: его показывает приложение
+    # (DockController.reveal), уже с нужным размером и без рамки. Иначе при запуске
+    # на миг видна белая рамка обычного окна.
+    flutter_window = pathlib.Path("windows/runner/flutter_window.cpp")
+    if flutter_window.exists():
+        text = flutter_window.read_text(encoding="utf-8")
+        new = re.sub(r"^(\s*)this->Show\(\);", r"\1// this->Show();  // показывает DockController.reveal", text, flags=re.MULTILINE)
+        if new != text:
+            flutter_window.write_text(new, encoding="utf-8")
+            print("Окно Windows: не показывается до первого кадра")
     cmake = pathlib.Path("windows/CMakeLists.txt")
     flag = "add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)"
     if cmake.exists():
