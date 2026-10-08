@@ -62,4 +62,67 @@ class Win32Frame {
       return false;
     }
   }
+
+  static int _findHwnd(DynamicLibrary user32, String title) {
+    final findWindow = user32.lookupFunction<
+        IntPtr Function(Pointer<Utf16>, Pointer<Utf16>),
+        int Function(Pointer<Utf16>, Pointer<Utf16>)>('FindWindowW');
+    final cls = 'FLUTTER_RUNNER_WIN32_WINDOW'.toNativeUtf16();
+    final name = title.toNativeUtf16();
+    var hwnd = findWindow(cls, name);
+    if (hwnd == 0) hwnd = findWindow(cls, nullptr);
+    malloc.free(cls);
+    malloc.free(name);
+    return hwnd;
+  }
+
+  /// Показывает окно, НЕ забирая фокус у другой программы (SW_SHOWNOACTIVATE),
+  /// либо прячет его совсем (SW_HIDE). Так кнопка у края появляется без побочных эффектов.
+  static bool setShown(String title, bool shown) {
+    if (!Platform.isWindows) return false;
+    try {
+      final user32 = DynamicLibrary.open('user32.dll');
+      final hwnd = _findHwnd(user32, title);
+      if (hwnd == 0) return false;
+      final showWindow = user32
+          .lookupFunction<Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow');
+      showWindow(hwnd, shown ? 4 : 0);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Обрезает видимую и «нажимаемую» часть окна до [logicalW] x [logicalH] (логические
+  /// пиксели) от левого верхнего угла. Всё, что Windows оставила сверх этого размера,
+  /// становится невидимым. Нули снимают обрезку.
+  static bool clipTo(String title, double logicalW, double logicalH) {
+    if (!Platform.isWindows) return false;
+    try {
+      final user32 = DynamicLibrary.open('user32.dll');
+      final hwnd = _findHwnd(user32, title);
+      if (hwnd == 0) return false;
+      final setRgn = user32.lookupFunction<Int32 Function(IntPtr, IntPtr, Int32),
+          int Function(int, int, int)>('SetWindowRgn');
+      if (logicalW <= 0 || logicalH <= 0) {
+        setRgn(hwnd, 0, 1);
+        return true;
+      }
+      var scale = 1.0;
+      try {
+        final getDpi =
+            user32.lookupFunction<Uint32 Function(IntPtr), int Function(int)>('GetDpiForWindow');
+        final dpi = getDpi(hwnd);
+        if (dpi > 0) scale = dpi / 96.0;
+      } catch (_) {}
+      final gdi = DynamicLibrary.open('gdi32.dll');
+      final createRgn = gdi.lookupFunction<IntPtr Function(Int32, Int32, Int32, Int32),
+          int Function(int, int, int, int)>('CreateRectRgn');
+      final rgn = createRgn(0, 0, (logicalW * scale).round(), (logicalH * scale).round());
+      setRgn(hwnd, rgn, 1); // система забирает регион себе
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }

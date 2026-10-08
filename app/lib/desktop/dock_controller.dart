@@ -115,6 +115,12 @@ class DockController with WindowListener {
       final w = settings.width.clamp(DesktopSettings.minWidth, DesktopSettings.maxWidth).toDouble();
       await windowManager.setBounds(expanded ? _expandedRect(area, w) : _collapsedRect(area));
     }
+    // у кнопки Windows может оставить окно шире 40 px: лишнее обрезаем
+    if (expanded) {
+      Win32Frame.clipTo(_title, 0, 0);
+    } else {
+      Win32Frame.clipTo(_title, collapsedSize, collapsedSize);
+    }
   }
 
   bool _resizing = false;
@@ -182,13 +188,11 @@ class DockController with WindowListener {
   bool _buttonShown = true;
   bool _edgeChecking = false;
 
-  /// Кнопка «спрятана»: окно на месте, но невидимо и пропускает мышь сквозь себя.
+  /// Кнопка «спрятана»: окно скрыто совсем; у края оно показывается без захвата фокуса.
   Future<void> _setButtonVisible(bool visible) async {
     if (_buttonShown == visible) return;
     _buttonShown = visible;
-    await windowManager.setOpacity(visible ? 1.0 : 0.0);
-    await windowManager.setIgnoreMouseEvents(!visible);
-    Win32Frame.makeBorderless(_title);
+    Win32Frame.setShown(_title, visible);
   }
 
   void _startEdgeWatch() {
