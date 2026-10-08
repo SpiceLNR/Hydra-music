@@ -96,6 +96,7 @@ class DockController with WindowListener {
   Future<void> _place({required bool expanded}) async {
     _ignoreUntil = DateTime.now().add(const Duration(milliseconds: 800));
     final area = await _workArea();
+    Win32Frame.makeBorderless(_title); // до размеров: с рамкой Windows не даст сделать окно узким
     if (expanded) {
       final w = settings.width.clamp(DesktopSettings.minWidth, DesktopSettings.maxWidth).toDouble();
       await windowManager.setAlwaysOnTop(false);
@@ -107,6 +108,12 @@ class DockController with WindowListener {
       await windowManager.setMaximumSize(const Size(collapsedSize, collapsedSize));
       await windowManager.setAlwaysOnTop(true);
       await windowManager.setBounds(_collapsedRect(area));
+    }
+    // после: некоторые вызовы окна возвращают рамку, а с ней и минимальный размер;
+    // снимаем её и ещё раз ставим точные размеры
+    if (Win32Frame.makeBorderless(_title)) {
+      final w = settings.width.clamp(DesktopSettings.minWidth, DesktopSettings.maxWidth).toDouble();
+      await windowManager.setBounds(expanded ? _expandedRect(area, w) : _collapsedRect(area));
     }
   }
 
@@ -181,6 +188,7 @@ class DockController with WindowListener {
     _buttonShown = visible;
     await windowManager.setOpacity(visible ? 1.0 : 0.0);
     await windowManager.setIgnoreMouseEvents(!visible);
+    Win32Frame.makeBorderless(_title);
   }
 
   void _startEdgeWatch() {
