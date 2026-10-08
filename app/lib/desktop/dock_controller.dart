@@ -46,7 +46,8 @@ class DockController with WindowListener {
     final options = WindowOptions(
       size: Size(settings.width, 800),
       minimumSize: const Size(DesktopSettings.minWidth, _minHeight),
-      titleBarStyle: TitleBarStyle.hidden,
+      // titleBarStyle не задаём: «hidden» из window_manager оставляет по краям окна белую
+      // кромку в 8 px (место бывшей рамки). Рамку снимает Win32Frame.makeBorderless.
       backgroundColor: const Color(0xFF000000),
       skipTaskbar: true, // приложения нет в панели задач
       title: _title,
@@ -65,6 +66,7 @@ class DockController with WindowListener {
   Future<void> reveal() async {
     if (!Platform.isWindows || !_ready) return;
     await Future<void>.delayed(const Duration(milliseconds: 60));
+    Win32Frame.makeBorderless(_title); // повторно: вдруг рамку вернули при показе
     await windowManager.show();
     await windowManager.focus();
     await windowManager.setSkipTaskbar(true);
