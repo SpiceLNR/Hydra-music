@@ -2,14 +2,16 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'app_messenger.dart';
+import 'audio_engine.dart';
 import 'audio_handler.dart';
 import 'library_controller.dart';
 import 'models.dart';
 
-/// Воспроизведение очереди (порядок плейлиста) поверх media_kit.
+/// Воспроизведение очереди (порядок плейлиста). Звук ведёт [AudioEngine]: на Android
+/// ExoPlayer, на Windows mpv.
 ///
 /// Нативный плеер создаётся лениво, при первом `playQueue`, поэтому в тестах и до
 /// первого запуска музыки нативные библиотеки не нужны. Экраны слушают сам сервис
@@ -25,7 +27,11 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   /// Есть ли сейчас выбранный трек (для панели «Сейчас играет»).
   static final ValueNotifier<bool> hasTrack = ValueNotifier<bool>(false);
 
-  late final Player _player = Player();
+  /// Создание движка (подменяется в тестах).
+  AudioEngine Function() engineFactory = createAudioEngine;
+  late final AudioEngine _engine = engineFactory();
+  DateTime _lastPrevious = DateTime.fromMillisecondsSinceEpoch(0);
+  int _errorStreak = 0;
   bool _wired = false;
   bool _askedNotifications = false;
   HydraAudioHandler? _handler;
@@ -50,39 +56,55 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   Future<void> setVolume(double value) async {
     volume = value.clamp(0, 100).toDouble();
     notifyListeners();
-    if (_wired) await _player.setVolume(volume);
+    if (_wired) await _engine.setVolume(volume);
   }
 
   void _wire() {
     if (_wired) return;
     _wired = true;
-    _player.setVolume(volume);
-    _player.stream.playing.listen((v) {
+    _engine.setVolume(volume);
+    _engine.playingStream.listen((v) {
       playing = v;
       notifyListeners();
       _publish();
     });
-    _player.stream.position.listen((v) {
+    _engine.positionStream.listen((v) {
+      // меньше 0.25 с не перерисовываем интерфейс: лишняя нагрузка на телефон
+      if (v != Duration.zero && (v - position).abs() < const Duration(milliseconds: 250)) return;
       position = v;
+      if (v > const Duration(seconds: 1)) _errorStreak = 0;
       notifyListeners();
     });
-    _player.stream.duration.listen((v) {
+    _engine.durationStream.listen((v) {
       duration = v;
       notifyListeners();
       _publish();
     });
-    _player.stream.playlist.listen((p) {
-      if (p.index != index) {
-        index = p.index;
+    _engine.indexStream.listen((i) {
+      if (i != index && i >= 0 && i < queue.length) {
+        index = i;
         position = Duration.zero;
         notifyListeners();
         _publishTrack();
         _publish();
       }
     });
-    _player.stream.completed.listen((done) {
+    _engine.completedStream.listen((done) {
       if (done) _publish(completed: true);
     });
+    _engine.errorStream.listen(_onError);
+  }
+
+  /// Файл не открылся: говорим об этом с причиной и, если движок позволяет,
+  /// переходим к следующему треку (не больше пяти ошибок подряд).
+  void _onError(String message) {
+    final t = current;
+    final name = t == null ? '' : '«${t.title}» (${t.fileName}): ';
+    showAppMessage('Не удалось воспроизвести $name$message');
+    _errorStreak++;
+    if (_engine.skipOnError && _errorStreak <= 5 && index < queue.length - 1) {
+      Future<void>.delayed(const Duration(milliseconds: 300), () => _engine.next());
+    }
   }
 
   /// Сообщает системе текущее состояние (уведомление, экран блокировки).
@@ -128,15 +150,13 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
       _askedNotifications = true;
       unawaited(Permission.notification.request());
     }
-    await _player.open(Playlist([for (final t in queue) Media(t.path)], index: index));
+    _errorStreak = 0;
+    await _engine.open([for (final t in queue) t.path], index);
     _publishTrack();
     _publish();
   }
 
-  Future<void> playOrPause() {
-    if (queue.isEmpty) return Future<void>.value();
-    return _player.playOrPause();
-  }
+  Future<void> playOrPause() => playing ? pause() : play();
 
   // ---- PlayerControls: команды из уведомления, наушников и экрана блокировки ----
 
@@ -146,21 +166,21 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   @override
   Future<void> play() {
     if (queue.isEmpty) return Future<void>.value();
-    return _player.play();
+    return _engine.play();
   }
 
   @override
   Future<void> pause() {
     if (queue.isEmpty) return Future<void>.value();
-    return _player.pause();
+    return _engine.pause();
   }
 
   /// «Стоп»: пауза и возврат в начало трека. Очередь остаётся, уведомление исчезает.
   @override
   Future<void> stop() async {
     if (queue.isEmpty) return;
-    await _player.pause();
-    await _player.seek(Duration.zero);
+    await _engine.pause();
+    await _engine.seek(Duration.zero);
     playing = false;
     position = Duration.zero;
     notifyListeners();
@@ -170,7 +190,7 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   @override
   Future<void> seek(Duration to) async {
     if (queue.isEmpty) return;
-    await _player.seek(to);
+    await _engine.seek(to);
     position = to;
     notifyListeners();
     _publish();
@@ -179,12 +199,22 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   @override
   Future<void> next() {
     if (queue.isEmpty) return Future<void>.value();
-    return _player.next();
+    return _engine.next();
   }
 
+  /// «Назад»: одно нажатие возвращает в начало трека, второе нажатие подряд
+  /// (в течение 1,5 с) переходит к предыдущему треку.
   @override
-  Future<void> previous() {
-    if (queue.isEmpty) return Future<void>.value();
-    return _player.previous();
+  Future<void> previous() async {
+    if (queue.isEmpty) return;
+    final now = DateTime.now();
+    final second = now.difference(_lastPrevious) < const Duration(milliseconds: 1500);
+    if (second) {
+      _lastPrevious = DateTime.fromMillisecondsSinceEpoch(0);
+      await _engine.previous();
+    } else {
+      _lastPrevious = now;
+      await seek(Duration.zero);
+    }
   }
 }
