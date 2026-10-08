@@ -19,6 +19,7 @@ import 'context_menu.dart';
 import 'desktop_settings.dart';
 import 'dock_controller.dart';
 import 'player_panel.dart';
+import 'resize_handle.dart';
 
 /// Главный экран Windows: «шторка» у края экрана. Развёрнутая или свёрнутая в полоску.
 class DesktopShell extends StatelessWidget {
@@ -913,21 +914,34 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
         } else {
           body = _trackList();
         }
+        final dockRight = DesktopSettings.instance.dockRight;
         return Scaffold(
-          body: Focus(
-            focusNode: _focus,
-            autofocus: true,
-            onKeyEvent: _onKey,
-            child: Column(
-              children: [
-                _header(),
-                PlayerPanel(dockRight: DesktopSettings.instance.dockRight),
-                if (hydraLibrary.scanning) const MetroProgress(),
-                _playlistBar(),
-                Expanded(child: body),
-                _status(),
-              ],
-            ),
+          body: Stack(
+            children: [
+              Focus(
+                focusNode: _focus,
+                autofocus: true,
+                onKeyEvent: _onKey,
+                child: Column(
+                  children: [
+                    _header(),
+                    PlayerPanel(dockRight: dockRight),
+                    if (hydraLibrary.scanning) const MetroProgress(),
+                    _playlistBar(),
+                    Expanded(child: body),
+                    _status(),
+                  ],
+                ),
+              ),
+              // край для изменения ширины: у стороны, противоположной краю экрана
+              Positioned(
+                top: 0,
+                bottom: 0,
+                left: dockRight ? 0 : null,
+                right: dockRight ? null : 0,
+                child: const ResizeHandle(),
+              ),
+            ],
           ),
         );
       },

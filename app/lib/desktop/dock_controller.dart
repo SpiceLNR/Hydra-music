@@ -6,13 +6,15 @@ import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'desktop_settings.dart';
+import 'win32_frame.dart';
 
 /// Окно Windows как «шторка» у края экрана.
 ///
 /// Развёрнутое: узкое окно на всю высоту рабочей области (до панели задач), прижато к
 /// выбранному краю. Когда пользователь кликает вне приложения (окно теряет фокус),
-/// оно само сжимается в узкую вертикальную полоску у того же края и остаётся поверх
-/// остальных окон. Кнопка в полоске разворачивает его обратно.
+/// оно само сжимается в маленькую зелёную кнопку (40x40) у того же края, посередине по
+/// высоте, и остаётся поверх остальных окон. Кнопка разворачивает окно обратно.
+/// В панели задач приложения нет. Рамки Windows у окна нет, ширину меняет [resizeToCursor].
 ///
 /// Пока открыт системный диалог (например, выбор картинки), сворачивание отключено:
 /// такие вызовы нужно оборачивать в [guard].
@@ -21,8 +23,9 @@ class DockController with WindowListener {
 
   static final DockController instance = DockController._();
 
-  /// Ширина свёрнутой полоски.
-  static const double stripWidth = 48;
+  /// Размер свёрнутой кнопки.
+  static const double collapsedSize = 40;
+  static const String _title = 'Hydra Music';
   static const double _minHeight = 360;
   static const double _maxHeight = 10000;
 
@@ -45,12 +48,15 @@ class DockController with WindowListener {
       minimumSize: const Size(DesktopSettings.minWidth, _minHeight),
       titleBarStyle: TitleBarStyle.hidden,
       backgroundColor: const Color(0xFF000000),
-      title: 'Hydra Music',
+      skipTaskbar: true, // приложения нет в панели задач
+      title: _title,
     );
     await windowManager.waitUntilReadyToShow(options, () async {
+      Win32Frame.makeBorderless(_title);
       await _place(expanded: true);
       await windowManager.show();
       await windowManager.focus();
+      await windowManager.setSkipTaskbar(true);
     });
     _ready = true;
   }
@@ -62,31 +68,57 @@ class DockController with WindowListener {
     return Rect.fromLTWH(pos.dx, pos.dy, size.width, size.height);
   }
 
+  Rect _expandedRect(Rect area, double width) => Rect.fromLTWH(
+        settings.dockRight ? area.right - width : area.left,
+        area.top,
+        width,
+        area.height,
+      );
+
+  Rect _collapsedRect(Rect area) => Rect.fromLTWH(
+        settings.dockRight ? area.right - collapsedSize : area.left,
+        area.top + (area.height - collapsedSize) / 2,
+        collapsedSize,
+        collapsedSize,
+      );
+
   Future<void> _place({required bool expanded}) async {
     _ignoreUntil = DateTime.now().add(const Duration(milliseconds: 800));
     final area = await _workArea();
-    final right = settings.dockRight;
     if (expanded) {
       final w = settings.width.clamp(DesktopSettings.minWidth, DesktopSettings.maxWidth).toDouble();
-      await windowManager.setResizable(true);
       await windowManager.setAlwaysOnTop(false);
       await windowManager.setMinimumSize(const Size(DesktopSettings.minWidth, _minHeight));
       await windowManager.setMaximumSize(const Size(DesktopSettings.maxWidth, _maxHeight));
-      await windowManager.setBounds(
-        Rect.fromLTWH(right ? area.right - w : area.left, area.top, w, area.height),
-      );
+      await windowManager.setBounds(_expandedRect(area, w));
     } else {
-      await windowManager.setMinimumSize(const Size(stripWidth, 100));
-      await windowManager.setMaximumSize(const Size(stripWidth, _maxHeight));
-      await windowManager.setResizable(false);
+      await windowManager.setMinimumSize(const Size(collapsedSize, collapsedSize));
+      await windowManager.setMaximumSize(const Size(collapsedSize, collapsedSize));
       await windowManager.setAlwaysOnTop(true);
-      await windowManager.setBounds(
-        Rect.fromLTWH(right ? area.right - stripWidth : area.left, area.top, stripWidth, area.height),
-      );
+      await windowManager.setBounds(_collapsedRect(area));
     }
   }
 
-  /// Сжимает окно в полоску у края.
+  bool _resizing = false;
+
+  /// Меняет ширину окна по положению курсора (тянут за край [ResizeHandle]).
+  Future<void> resizeToCursor() async {
+    if (!_ready || collapsed.value || _busy || _resizing) return;
+    _resizing = true;
+    try {
+      final p = await screenRetriever.getCursorScreenPoint();
+      final area = await _workArea();
+      final raw = settings.dockRight ? area.right - p.dx : p.dx - area.left;
+      final w = raw.clamp(DesktopSettings.minWidth, DesktopSettings.maxWidth).toDouble();
+      settings.setWidth(w);
+      _ignoreUntil = DateTime.now().add(const Duration(milliseconds: 400));
+      await windowManager.setBounds(_expandedRect(area, w));
+    } finally {
+      _resizing = false;
+    }
+  }
+
+  /// Сжимает окно в маленькую кнопку у края.
   Future<void> collapse() async {
     if (!_ready || collapsed.value || _busy) return;
     _busy = true;
@@ -98,7 +130,7 @@ class DockController with WindowListener {
     }
   }
 
-  /// Разворачивает полоску обратно в окно.
+  /// Разворачивает кнопку обратно в окно.
   Future<void> expand() async {
     if (!_ready || !collapsed.value || _busy) return;
     _busy = true;
@@ -141,17 +173,5 @@ class DockController with WindowListener {
     if (!_ready || !settings.autoCollapse || collapsed.value || _guards > 0 || _busy) return;
     if (DateTime.now().isBefore(_ignoreUntil)) return;
     unawaited(collapse());
-  }
-
-  @override
-  void onWindowResized() {
-    unawaited(_rememberWidth());
-  }
-
-  Future<void> _rememberWidth() async {
-    if (!_ready || collapsed.value || _busy) return;
-    if (DateTime.now().isBefore(_ignoreUntil)) return;
-    final b = await windowManager.getBounds();
-    settings.setWidth(b.width);
   }
 }
