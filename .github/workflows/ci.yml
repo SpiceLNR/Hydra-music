@@ -75,10 +75,6 @@ jobs:
       - name: Build debug APK
         working-directory: app
         run: flutter build apk --debug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hydra-music-debug-apk
-          path: app/build/app/outputs/flutter-apk/app-debug.apk
       - name: Free space before release build
         working-directory: app
         run: |
@@ -94,6 +90,8 @@ jobs:
         with:
           name: hydra-music-release-apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
+          # хранилище артефактов GitHub ограничено: старые сборки удаляем через 3 дня
+          retention-days: 3
 
   windows-build:
     name: Windows build
@@ -137,3 +135,4 @@ jobs:
         with:
           name: hydra-music-windows
           path: app/build/windows/x64/runner/Release
+          retention-days: 3
