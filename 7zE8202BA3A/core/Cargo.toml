@@ -1,0 +1,27 @@
+[package]
+name = "hydra_core"
+version = "0.1.0"
+edition = "2021"
+description = "Hydra Music core: journal, hybrid logical clock, storage rules"
+license = "MIT"
+
+[lib]
+name = "hydra_core"
+crate-type = ["rlib"]
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+unicode-normalization = "0.1"
+lofty = "0.22"
+# шифрованный канал между устройствами (Noise), чисто Rust, без системных библиотек
+snow = "0.9"
+# обложки: чтение png/jpeg/webp и сжатие до 1000 px (в теги кладётся jpeg)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
+[dev-dependencies]
+tempfile = "3"
