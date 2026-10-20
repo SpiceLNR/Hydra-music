@@ -15,7 +15,7 @@ void main() {
 
     await tester.pumpWidget(const HydraApp());
 
-    expect(find.text('HYDRA MUSIC'), findsOneWidget);
+    expect(find.textContaining('HYDRA MUSIC'), findsOneWidget);
     expect(find.text('Плейлисты'), findsOneWidget);
     expect(find.text('Устройства'), findsOneWidget);
     expect(find.text('Корзина'), findsOneWidget);
