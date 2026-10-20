@@ -3,10 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../core_bridge.dart';
-import '../demo_data.dart';
 import '../library_controller.dart';
 import '../models.dart';
 import '../player_service.dart';
@@ -555,12 +553,8 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
   }
 
   Widget _header() {
-    // перетаскивание за шапку; двойной щелчок намеренно ничего не делает
-    // (стандартная область DragToMoveArea разворачивала бы окно на весь экран)
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => windowManager.startDragging(),
-      child: Container(
+    // окно жёстко закреплено у края экрана: шапку нельзя тянуть
+    return Container(
         height: 44,
         color: Metro.bg,
         padding: const EdgeInsets.only(left: 12, right: 4),
@@ -569,13 +563,12 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
             const Text('HYDRA MUSIC',
                 style: TextStyle(fontSize: 13, letterSpacing: 2, color: Metro.green)),
             const Spacer(),
-            _headerButton(Icons.devices, 'Устройства', () => _openRoute(DevicesScreen(devices: demoDevices()))),
+            _headerButton(Icons.devices, 'Устройства', () => _openRoute(const DevicesScreen())),
             _headerButton(Icons.delete_outline, 'Корзина', _toggleTrash, active: _mode == _Mode.trash),
             _headerButton(Icons.settings, 'Настройки', () => _openRoute(const SettingsScreen())),
             _headerButton(Icons.close, 'Закрыть', DockController.instance.close),
           ],
         ),
-      ),
     );
   }
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../demo_data.dart';
+import '../build_info.dart';
 import '../library_controller.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
@@ -55,10 +55,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             return ListView(
               padding: const EdgeInsets.only(bottom: 16),
               children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 24, 16, 4),
-                  child: Text('HYDRA MUSIC',
-                      style: TextStyle(fontSize: 14, letterSpacing: 2, color: Metro.green)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 24, 16, 4),
+                  child: Text('HYDRA MUSIC · сборка $kBuild',
+                      style: const TextStyle(fontSize: 14, letterSpacing: 2, color: Metro.green)),
                 ),
                 const SectionTitle('главная'),
                 _StatusBanner(lib: hydraLibrary),
@@ -82,7 +82,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         subtitle: 'синхронизация',
                         icon: Icons.devices,
                         color: Metro.greenDark,
-                        onTap: () => _open(DevicesScreen(devices: demoDevices())),
+                        onTap: () => _open(const DevicesScreen()),
                       ),
                       MetroTile(
                         label: 'Корзина',

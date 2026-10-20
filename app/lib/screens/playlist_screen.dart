@@ -7,6 +7,7 @@ import '../library_controller.dart';
 import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
+import '../widgets/marquee_text.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
 import 'player_screen.dart';
@@ -31,6 +32,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   bool _loading = true;
   bool _editing = false;
   String? _selectedId;
+
+  /// Правило порядка треков этого плейлиста: manual (как попало), artist, title.
+  late String _sortMode = widget.playlist.sortMode;
 
   /// Перестановки идут в ядро строго по очереди, чтобы порядок операций не перепутался.
   Future<void> _reorderQueue = Future<void>.value();
@@ -82,21 +86,57 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     await _load();
   }
 
+  /// Высота строки трека одинакова в обычном режиме и в режиме перестановки:
+  /// иначе при переключении список «уезжает» (ошибка набегает с каждой строкой).
+  static const double _rowExtent = 74;
+
+  ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Список при смене режима пересоздаётся: переносим положение прокрутки,
+  /// чтобы остаться на том же месте, а не прыгнуть в начало.
+  void _carryScroll() {
+    final offset = _scroll.hasClients ? _scroll.offset : 0.0;
+    final old = _scroll;
+    _scroll = ScrollController(initialScrollOffset: offset);
+    WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+  }
+
   void _startEditing() {
     HapticFeedback.mediumImpact();
+    _carryScroll();
     setState(() {
       _editing = true;
       _selectedId = null;
     });
   }
 
-  void _stopEditing() => setState(() => _editing = false);
+  void _stopEditing() {
+    _carryScroll();
+    setState(() => _editing = false);
+  }
 
   void _onReorder(int oldIndex, int newIndex) {
     if (newIndex > oldIndex) newIndex -= 1;
     if (newIndex == oldIndex) return;
     final moved = _tracks[oldIndex];
     final target = newIndex;
+    if (_sortMode != 'manual') {
+      // ручная перестановка отключает правило, иначе оно сразу вернуло бы всё назад
+      _sortMode = 'manual';
+      _reorderQueue = _reorderQueue.then((_) async {
+        try {
+          await hydraLibrary.setPlaylistSort(widget.playlist.id, 'manual');
+        } on CoreException catch (e) {
+          if (mounted) _toast(e.message);
+        }
+      });
+    }
     setState(() {
       final list = List<TrackInfo>.of(_tracks);
       list.removeAt(oldIndex);
@@ -111,6 +151,28 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         await _load();
       }
     });
+  }
+
+  static const List<(String, String)> _sortOptions = [
+    ('artist', 'По исполнителю'),
+    ('title', 'По названию трека'),
+    ('manual', 'Как попало'),
+  ];
+
+  String get _sortLabel =>
+      _sortOptions.firstWhere((o) => o.$1 == _sortMode, orElse: () => _sortOptions.last).$2;
+
+  /// Меняет правило порядка. Для «по исполнителю» и «по названию» треки сразу
+  /// пересортировываются, и новые песни потом встают на своё место сами.
+  Future<void> _setSort(String mode) async {
+    if (mode == _sortMode) return;
+    try {
+      await hydraLibrary.setPlaylistSort(widget.playlist.id, mode);
+      if (mounted) setState(() => _sortMode = mode);
+    } on CoreException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+    await _load();
   }
 
   Future<void> _delete(TrackInfo t) async {
@@ -235,18 +297,26 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   Widget _normalList() {
     return ListView.builder(
+      controller: _scroll,
+      itemExtent: _rowExtent,
       itemCount: _tracks.length,
       itemBuilder: (context, i) {
         final t = _tracks[i];
         final isSel = t.id == _selectedId;
-        return Container(
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Container(
           color: isSel ? Metro.surface : null,
           child: ListTile(
             leading: Cover(isVideo: t.isVideo),
-            title: Text('${i + 1}. ${t.title}', style: const TextStyle(fontSize: 18)),
-            subtitle: Text(t.artist ?? t.fileName),
+            // у выбранного трека название и исполнитель едут бегущей строкой;
+            // высота строки у всех одинаковая
+            title: MarqueeText('${i + 1}. ${t.title}',
+                style: const TextStyle(fontSize: 18), active: isSel),
+            subtitle: MarqueeText(t.artist ?? t.fileName, active: isSel),
             onTap: () => setState(() => _selectedId = isSel ? null : t.id),
             onLongPress: _startEditing,
+          ),
           ),
         );
       },
@@ -256,15 +326,39 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   Widget _editList() {
     return Column(
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Тяните за зелёную область справа, чтобы изменить порядок.'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+          child: PopupMenuButton<String>(
+            tooltip: 'Порядок треков',
+            onSelected: _setSort,
+            itemBuilder: (context) => [
+              for (final o in _sortOptions)
+                CheckedPopupMenuItem<String>(
+                  value: o.$1,
+                  checked: o.$1 == _sortMode,
+                  child: Text(o.$2),
+                ),
+            ],
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              decoration: BoxDecoration(border: Border.all(color: Metro.green, width: 2)),
+              child: Row(
+                children: [
+                  const Icon(Icons.sort, color: Metro.green),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('Порядок: $_sortLabel', style: const TextStyle(fontSize: 16))),
+                  const Icon(Icons.arrow_drop_down),
+                ],
+              ),
+            ),
           ),
         ),
+        const SizedBox(height: 8),
         Expanded(
           child: ReorderableListView.builder(
+            scrollController: _scroll,
+            itemExtent: _rowExtent,
             buildDefaultDragHandles: false,
             itemCount: _tracks.length,
             onReorder: _onReorder,
@@ -272,14 +366,15 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 Material(color: Metro.surface, child: child),
             itemBuilder: (context, i) {
               final t = _tracks[i];
-              return Container(
+              return Padding(
                 key: ValueKey<String>(t.id),
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Container(
                 color: Metro.surface,
-                margin: const EdgeInsets.only(bottom: 2),
                 child: ListTile(
                   leading: Cover(isVideo: t.isVideo),
-                  title: Text('${i + 1}. ${t.title}', style: const TextStyle(fontSize: 18)),
-                  subtitle: Text(t.artist ?? t.fileName),
+                  title: MarqueeText('${i + 1}. ${t.title}', style: const TextStyle(fontSize: 18)),
+                  subtitle: MarqueeText(t.artist ?? t.fileName),
                   trailing: ReorderableDragStartListener(
                     index: i,
                     child: Container(
@@ -289,6 +384,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                       child: const Icon(Icons.drag_handle, color: Colors.white, size: 32),
                     ),
                   ),
+                ),
                 ),
               );
             },
