@@ -76,6 +76,12 @@ jobs:
       - name: Flutter tests
         working-directory: app
         run: flutter test
+      # Постоянный ключ подписи: без него каждый запуск CI создаёт новый ключ,
+      # и Android не даёт обновить приложение поверх прежней сборки.
+      - name: Use a fixed signing key
+        run: |
+          mkdir -p ~/.android
+          cp tools/debug.keystore ~/.android/debug.keystore
       - name: Build debug APK
         working-directory: app
         run: flutter build apk --debug
