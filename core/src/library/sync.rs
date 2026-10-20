@@ -955,10 +955,13 @@ mod tests {
         put(&a, "Rock", "common.mp3", "common-bytes");
         put(&a, "Rock", "only-a.mp3", "a-bytes");
         put(&a, "Jazz", "j.mp3", "jazz-bytes");
-        put(&b, "rock", "common.mp3", "common-bytes"); // имя папки в другом регистре
-        put(&b, "Rock", "only-b.mp3", "b-bytes");
-        a.scan(T0 + 1).unwrap();
-        b.scan(T0 + 2).unwrap();
+        // у второго устройства папка называется в другом регистре. Обе песни лежат в одной
+        // папке: на Linux «rock» и «Rock» - разные папки, а на Windows одна и та же
+        put(&b, "rock", "common.mp3", "common-bytes");
+        put(&b, "rock", "only-b.mp3", "b-bytes");
+        // имя плейлиста берётся из самой поздней записи: пусть это будет «Rock» первого устройства
+        b.scan(T0 + 1).unwrap();
+        a.scan(T0 + 2).unwrap();
 
         sync_pair(&mut a, &mut b, T0 + 10);
 
