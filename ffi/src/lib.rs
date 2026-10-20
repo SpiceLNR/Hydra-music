@@ -10,23 +10,49 @@
 //! Паника внутри ядра превращается в ответ с ошибкой и не роняет приложение.
 
 use hydra_core::library::Library;
+use hydra_core::net::{Family, Identity, LibHandle, Node};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct State {
     lib: Library,
     cache_dir: PathBuf,
+    data_dir: PathBuf,
+    device_id: String,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
+/// Доступ сети к библиотеке: замок берётся только на время одного шага обмена.
+struct FfiHandle;
+
+impl LibHandle for FfiHandle {
+    fn with<R>(
+        &self,
+        f: impl FnOnce(&mut Library) -> hydra_core::Result<R>,
+    ) -> hydra_core::Result<R> {
+        let mut guard = STATE.lock().unwrap_or_else(|p| p.into_inner());
+        match guard.as_mut() {
+            Some(st) => f(&mut st.lib),
+            None => Err(hydra_core::Error::Invalid(
+                "library is not open".to_string(),
+            )),
+        }
+    }
+}
+
+static NODE: Mutex<Option<Arc<Node<FfiHandle>>>> = Mutex::new(None);
+
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn es<E: std::fmt::Display>(e: E) -> String {
@@ -84,16 +110,22 @@ fn open(args: &Value) -> Result<Value, String> {
     fs::create_dir_all(&data_dir).map_err(es)?;
     fs::create_dir_all(&cache_dir).map_err(es)?;
     let device_id = load_or_create_device_id(&data_dir)?;
-    let lib =
-        Library::open(&root, &data_dir.join("hydra.db"), &device_id, now_ms()).map_err(es)?;
+    let lib = Library::open(&root, &data_dir.join("hydra.db"), &device_id, now_ms()).map_err(es)?;
     let mut guard = STATE.lock().unwrap_or_else(|p| p.into_inner());
-    *guard = Some(State { lib, cache_dir });
+    *guard = Some(State {
+        lib,
+        cache_dir,
+        data_dir,
+        device_id: device_id.clone(),
+    });
     Ok(json!({ "device_id": device_id, "root": root.to_string_lossy() }))
 }
 
 fn with_state<T>(f: impl FnOnce(&mut State) -> Result<T, String>) -> Result<T, String> {
     let mut guard = STATE.lock().unwrap_or_else(|p| p.into_inner());
-    let st = guard.as_mut().ok_or("library is not open: call `open` first")?;
+    let st = guard
+        .as_mut()
+        .ok_or("library is not open: call `open` first")?;
     f(st)
 }
 
@@ -116,28 +148,54 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
             arg_usize(args, "index")?,
             now_ms(),
         )),
+        "set_playlist_sort" => to_json(st.lib.set_playlist_sort(
+            &arg_str(args, "playlist_id")?,
+            &arg_str(args, "mode")?,
+            now_ms(),
+        )),
+        "sort_tracks" => {
+            let ids: Vec<String> = args["ids"]
+                .as_array()
+                .ok_or_else(|| "ids must be an array".to_string())?
+                .iter()
+                .filter_map(|v| v.as_str().map(|x| x.to_string()))
+                .collect();
+            to_json(
+                st.lib
+                    .set_track_order(&arg_str(args, "playlist_id")?, &ids, now_ms()),
+            )
+        }
         "purge_track" => to_json(st.lib.purge_track(&arg_str(args, "track_id")?)),
         "purge_trash" => to_json(st.lib.purge_expired_trash(now_ms())),
         "empty_trash" => to_json(st.lib.empty_trash()),
         "rename_playlist" => to_json(
-            st.lib.rename_playlist(&arg_str(args, "playlist_id")?, &arg_str(args, "name")?),
+            st.lib
+                .rename_playlist(&arg_str(args, "playlist_id")?, &arg_str(args, "name")?),
         ),
         "delete_playlist" => to_json(st.lib.delete_playlist(&arg_str(args, "playlist_id")?)),
-        "reorder_playlist" => to_json(st.lib.reorder_playlist(
-            &arg_str(args, "playlist_id")?,
-            arg_usize(args, "index")?,
-        )),
+        "reorder_playlist" => to_json(
+            st.lib
+                .reorder_playlist(&arg_str(args, "playlist_id")?, arg_usize(args, "index")?),
+        ),
         "rename_track" => {
             let written = st
                 .lib
-                .rename_track(&arg_str(args, "track_id")?, &arg_str(args, "title")?, now_ms())
+                .rename_track(
+                    &arg_str(args, "track_id")?,
+                    &arg_str(args, "title")?,
+                    now_ms(),
+                )
                 .map_err(es)?;
             Ok(json!({ "tag_written": written }))
         }
         "set_cover" => {
             let id = arg_str(args, "track_id")?;
             st.lib
-                .set_cover(&id, std::path::Path::new(&arg_str(args, "image_path")?), now_ms())
+                .set_cover(
+                    &id,
+                    std::path::Path::new(&arg_str(args, "image_path")?),
+                    now_ms(),
+                )
                 .map_err(es)?;
             Ok(Value::Null)
         }
@@ -173,6 +231,65 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
     }
 }
 
+fn node() -> Result<Arc<Node<FfiHandle>>, String> {
+    NODE.lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .ok_or_else(|| "network is not started: call `net_start` first".to_string())
+}
+
+/// Сетевые методы. Библиотеку они не блокируют: тяжёлая работа идёт в фоновых потоках,
+/// а интерфейс опрашивает `net_status`.
+fn net_call(method: &str, args: &Value) -> Result<Value, String> {
+    if method == "net_start" {
+        let name = arg_str(args, "name")?;
+        let (data_dir, device_id) =
+            with_state(|st| Ok((st.data_dir.clone(), st.device_id.clone())))?;
+        let n = {
+            let mut guard = NODE.lock().unwrap_or_else(|p| p.into_inner());
+            if guard.is_none() {
+                let ident = Identity::load_or_create(&data_dir, &device_id, &name).map_err(es)?;
+                let family = Family::load(&data_dir);
+                *guard = Some(Node::new(ident, family, Arc::new(FfiHandle)));
+            }
+            guard.clone().ok_or("network node missing")?
+        };
+        n.start().map_err(es)?;
+        return Ok(n.status_json());
+    }
+    let n = node()?;
+    match method {
+        "net_status" => Ok(n.status_json()),
+        "net_family" => Ok(n.family_json()),
+        "net_pair_offer" => Ok(n.pair_offer()),
+        "net_pair_cancel" => {
+            n.pair_cancel();
+            Ok(Value::Null)
+        }
+        "net_pair_connect" => {
+            let addrs: Vec<String> = args["addrs"]
+                .as_array()
+                .ok_or_else(|| "addrs must be an array".to_string())?
+                .iter()
+                .filter_map(|v| v.as_str().map(|x| x.to_string()))
+                .collect();
+            n.pair_with(
+                addrs,
+                &arg_str(args, "public_key")?,
+                &arg_str(args, "secret")?,
+            )
+            .map_err(es)?;
+            Ok(Value::Null)
+        }
+        "net_sync" => {
+            n.sync_peer(&arg_str(args, "device_id")?).map_err(es)?;
+            Ok(Value::Null)
+        }
+        "net_forget" => to_json(n.forget(&arg_str(args, "device_id")?)),
+        other => Err(format!("unknown method: {other}")),
+    }
+}
+
 fn dispatch(request: &str) -> Result<Value, String> {
     let req: Value = serde_json::from_str(request).map_err(|e| format!("bad request: {e}"))?;
     let method = req["method"].as_str().ok_or("missing method")?.to_string();
@@ -183,6 +300,7 @@ fn dispatch(request: &str) -> Result<Value, String> {
             "ffi": env!("CARGO_PKG_VERSION"),
         })),
         "open" => open(args),
+        m if m.starts_with("net_") => net_call(m, args),
         _ => with_state(|st| call(st, &method, args)),
     }
 }
@@ -307,7 +425,10 @@ mod tests {
         let tracks = ok("tracks", json!({ "playlist_id": rock }));
         assert_eq!(tracks[0]["file_name"], "b.flac");
 
-        ok("move_track", json!({ "track_id": a, "to_playlist_id": jazz_id }));
+        ok(
+            "move_track",
+            json!({ "track_id": a, "to_playlist_id": jazz_id }),
+        );
         assert!(root.join("Jazz").join("a.mp3").exists());
 
         ok("delete_track", json!({ "track_id": b }));
@@ -325,7 +446,10 @@ mod tests {
         assert!(ok("trash_items", json!({})).as_array().unwrap().is_empty());
 
         // ошибки ядра доходят текстом, а не падением
-        let err = call_json("move_track", json!({ "track_id": "nope", "to_playlist_id": rock }));
+        let err = call_json(
+            "move_track",
+            json!({ "track_id": "nope", "to_playlist_id": rock }),
+        );
         assert_eq!(err["ok"], false);
         assert!(err["error"].as_str().unwrap().contains("not found"));
         let missing = call_json("tracks", json!({}));
@@ -344,17 +468,29 @@ mod tests {
         assert_eq!(ok("playlists", json!({})).as_array().unwrap().len(), 2);
 
         // переименование и порядок плейлистов
-        let renamed = ok("rename_playlist", json!({ "playlist_id": jazz_id, "name": "Blues" }));
+        let renamed = ok(
+            "rename_playlist",
+            json!({ "playlist_id": jazz_id, "name": "Blues" }),
+        );
         assert_eq!(renamed["name"], "Blues");
         assert!(root.join("Blues").is_dir() && !root.join("Jazz").exists());
-        ok("reorder_playlist", json!({ "playlist_id": jazz_id, "index": 0 }));
+        ok(
+            "reorder_playlist",
+            json!({ "playlist_id": jazz_id, "index": 0 }),
+        );
         assert_eq!(ok("playlists", json!({}))[0]["name"], "Blues");
 
         // название трека: в файле-пустышке теги не пишутся, название хранится в приложении
         let renamed = ok("rename_track", json!({ "track_id": b, "title": "Новое" }));
         assert_eq!(renamed["tag_written"], false);
-        assert_eq!(ok("tracks", json!({ "playlist_id": rock }))[0]["title"], "Новое");
-        let bad = call_json("set_cover", json!({ "track_id": b, "image_path": "/no/such.png" }));
+        assert_eq!(
+            ok("tracks", json!({ "playlist_id": rock }))[0]["title"],
+            "Новое"
+        );
+        let bad = call_json(
+            "set_cover",
+            json!({ "track_id": b, "image_path": "/no/such.png" }),
+        );
         assert_eq!(bad["ok"], false);
 
         // удаление плейлиста: с треками нельзя, пустой можно

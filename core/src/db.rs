@@ -4,7 +4,7 @@ use crate::Result;
 use rusqlite::Connection;
 use std::path::Path;
 
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 4;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS tracks (
     hlc         TEXT NOT NULL         -- метка последнего изменения (победитель конфликта)
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_playlist ON tracks(playlist_id);
+
+-- Журнал плейлистов (создание, имя, удаление, порядок списка). Состояние плейлиста =
+-- последние значения по меткам HLC. playlist_id = '' означает порядок всего списка.
+CREATE TABLE IF NOT EXISTS pl_ops (
+    op_id       TEXT PRIMARY KEY,
+    hlc         TEXT NOT NULL,
+    device_id   TEXT NOT NULL,
+    playlist_id TEXT NOT NULL,
+    payload     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pl_ops_hlc ON pl_ops(hlc);
+CREATE INDEX IF NOT EXISTS idx_pl_ops_playlist ON pl_ops(playlist_id);
 
 -- Журнал операций: add / move / delete / edit. Это «история».
 CREATE TABLE IF NOT EXISTS ops (
@@ -93,6 +105,24 @@ fn migrate(conn: &Connection) -> Result<()> {
     )?;
     if has_sort == 0 {
         conn.execute_batch("ALTER TABLE playlists ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    // Версия 3: файл трека ещё не получен от другого устройства (`pending`).
+    let has_pending: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = 'pending'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_pending == 0 {
+        conn.execute_batch("ALTER TABLE tracks ADD COLUMN pending INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    // Версия 4: правило порядка треков плейлиста: manual | artist | title.
+    let has_sort_mode: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('playlists') WHERE name = 'sort_mode'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_sort_mode == 0 {
+        conn.execute_batch("ALTER TABLE playlists ADD COLUMN sort_mode TEXT NOT NULL DEFAULT 'manual';")?;
     }
     Ok(())
 }

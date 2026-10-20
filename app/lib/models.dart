@@ -1,16 +1,25 @@
 // Модели данных, приходящих из Rust-ядра (JSON), и временная модель устройства.
 
 class PlaylistInfo {
-  PlaylistInfo({required this.id, required this.name, required this.trackCount});
+  PlaylistInfo({
+    required this.id,
+    required this.name,
+    required this.trackCount,
+    this.sortMode = 'manual',
+  });
 
   final String id;
   final String name;
   final int trackCount;
 
+  /// Правило порядка треков: manual (как попало), artist, title.
+  final String sortMode;
+
   factory PlaylistInfo.fromJson(Map<String, dynamic> j) => PlaylistInfo(
         id: j['playlist_id'] as String,
         name: j['name'] as String,
         trackCount: (j['track_count'] as num).toInt(),
+        sortMode: (j['sort_mode'] as String?) ?? 'manual',
       );
 }
 
@@ -60,11 +69,32 @@ class TrashItem {
       );
 }
 
-/// Устройство в списке «Устройства». Пока демо-данные; настоящие приходят на этапе сети.
+/// Устройство из «семьи» (список на экране «Устройства»).
 class DeviceInfo {
-  DeviceInfo({required this.name, required this.online, required this.lastSync});
+  DeviceInfo({
+    required this.id,
+    required this.name,
+    required this.online,
+    required this.lastSyncMs,
+  });
 
+  factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
+        id: j['device_id'] as String,
+        name: j['name'] as String,
+        online: j['online'] as bool,
+        lastSyncMs: (j['last_sync_ms'] as num).toInt(),
+      );
+
+  final String id;
   final String name;
   final bool online;
-  final String lastSync;
+  final int lastSyncMs;
+
+  /// Когда последний раз синхронизировались, в понятном виде.
+  String get lastSyncLabel {
+    if (lastSyncMs <= 0) return 'ещё не синхронизировались';
+    final t = DateTime.fromMillisecondsSinceEpoch(lastSyncMs);
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(t.day)}.${two(t.month)} ${two(t.hour)}:${two(t.minute)}';
+  }
 }

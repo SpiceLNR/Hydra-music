@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'core_bridge.dart';
 import 'models.dart';
+import 'net_service.dart';
 
 enum LibraryStatus { idle, loading, needPermission, ready, error }
 
@@ -87,6 +89,7 @@ class LibraryController extends ChangeNotifier {
       // очистка корзины не критична
     }
     await refresh();
+    unawaited(hydraNet.start()); // сеть не должна задерживать открытие библиотеки
   }
 
   /// Сканирует папку Hydra и обновляет список плейлистов.
@@ -194,6 +197,17 @@ class LibraryController extends ChangeNotifier {
 
   Future<void> reorder(String trackId, int index) async {
     await Core.call('reorder', {'track_id': trackId, 'index': index});
+  }
+
+  /// Правило порядка треков плейлиста: manual, artist или title.
+  Future<void> setPlaylistSort(String playlistId, String mode) async {
+    await Core.call('set_playlist_sort', {'playlist_id': playlistId, 'mode': mode});
+    await reloadPlaylists();
+  }
+
+  /// Расставляет треки плейлиста в указанном порядке (сортировка).
+  Future<void> sortTracks(String playlistId, List<String> orderedIds) async {
+    await Core.call('sort_tracks', {'playlist_id': playlistId, 'ids': orderedIds});
   }
 
   /// Путь к файлу обложки из тегов трека или null, если обложки нет.
