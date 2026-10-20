@@ -41,14 +41,19 @@ pub struct Hello {
     pub proto: u32,
     pub device_id: String,
     pub name: String,
+    /// Порт, на котором это устройство принимает подключения (чтобы другая сторона
+    /// могла потом сама найти дорогу обратно, даже если поиск по сети не работает).
+    #[serde(default)]
+    pub port: u16,
 }
 
 impl Hello {
-    pub fn new(device_id: &str, name: &str) -> Hello {
+    pub fn new(device_id: &str, name: &str, port: u16) -> Hello {
         Hello {
             proto: PROTOCOL,
             device_id: device_id.to_string(),
             name: name.to_string(),
+            port,
         }
     }
 }

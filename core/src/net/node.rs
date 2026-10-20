@@ -204,14 +204,14 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     fn current_psk(&self) -> Option<[u8; 32]> {
         let mut o = lock(&self.offer);
-        match o.as_ref() {
-            Some(x) if x.created.elapsed() <= OFFER_TTL => Some(x.secret),
-            Some(_) => {
-                *o = None;
-                None
-            }
-            None => None,
+        let secret = o
+            .as_ref()
+            .filter(|x| x.created.elapsed() <= OFFER_TTL)
+            .map(|x| x.secret);
+        if secret.is_none() {
+            *o = None;
         }
+        secret
     }
 
     // ---------- входящие ----------
