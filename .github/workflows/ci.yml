@@ -89,7 +89,7 @@ jobs:
       # Подписывается отладочным ключом Flutter: подходит для личной установки.
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=HYDRA_BUILD=${{ github.sha }}
       # Основной способ получить APK: страница Releases -> «Latest build».
       # Файлы релиза не входят в квоту хранилища артефактов.
       - name: Publish APK to the latest release
@@ -145,7 +145,7 @@ jobs:
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: |
           flutter pub get
-          flutter build windows --release
+          flutter build windows --release --dart-define=HYDRA_BUILD=${{ github.sha }}
       - name: Put the Rust bridge next to the exe
         shell: bash
         run: cp ffi/target/release/hydra_ffi.dll app/build/windows/x64/runner/Release/
