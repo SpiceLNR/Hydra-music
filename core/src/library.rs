@@ -380,6 +380,60 @@ impl Library {
         Ok(written)
     }
 
+    /// Меняет название и исполнителя одной правкой (окно настроек трека в плеере).
+    /// Пустой исполнитель убирает его. Возвращает `true`, если теги записаны в файл
+    /// (или менять было нечего); иначе значения хранятся только в приложении.
+    pub fn edit_track(
+        &mut self,
+        track_id: &str,
+        title: &str,
+        artist: &str,
+        now_ms: u64,
+    ) -> Result<bool> {
+        let title = title.trim();
+        let artist = artist.trim();
+        if title.is_empty() {
+            return Err(Error::Invalid("название не может быть пустым".into()));
+        }
+        if title.chars().count() > 200 || artist.chars().count() > 200 {
+            return Err(Error::Invalid(
+                "название или исполнитель слишком длинные".into(),
+            ));
+        }
+        let t = self.live_track(track_id)?;
+        let shown_title = t.title.clone().unwrap_or_else(|| stem(&t.file_name));
+        let new_title = if shown_title == title {
+            None
+        } else {
+            Some(title)
+        };
+        let new_artist = if t.artist.as_deref().unwrap_or("").trim() == artist {
+            None
+        } else {
+            Some(artist)
+        };
+        if new_title.is_none() && new_artist.is_none() {
+            return Ok(true);
+        }
+        let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
+        let written = path.is_file()
+            && tags::write_text(&path, new_title, new_artist, &self.tmp_dir()).is_ok();
+        let mut payload = json!({});
+        if let Some(x) = new_title {
+            payload["title"] = json!(x);
+        }
+        if let Some(x) = new_artist {
+            payload["artist"] = json!(x);
+        }
+        if written {
+            payload["sha256"] = json!(sha256_file(&path)?);
+        }
+        self.record(now_ms, Kind::Edit, track_id, payload)?;
+        self.resort_playlist(&t.playlist_id, now_ms)?;
+        self.write_manifest(&t.playlist_id)?;
+        Ok(written)
+    }
+
     /// Заменяет обложку: картинка уменьшается, сжимается в jpeg и встраивается в файл.
     pub fn set_cover(&mut self, track_id: &str, image_path: &Path, now_ms: u64) -> Result<()> {
         let t = self.live_track(track_id)?;
@@ -1933,6 +1987,34 @@ mod tests {
             "not really an mp3"
         );
         assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
+    }
+
+    #[test]
+    fn edit_track_changes_title_and_artist_and_artist_can_be_cleared() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "not really an mp3");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let id = lib.tracks(&rock).unwrap()[0].track_id.clone();
+        assert!(lib.edit_track(&id, "  ", "X", T0 + 2).is_err());
+
+        let written = lib.edit_track(&id, " Песня ", " Группа ", T0 + 2).unwrap();
+        assert!(!written, "в нечитаемый файл теги не пишутся");
+        let t = lib.tracks(&rock).unwrap().remove(0);
+        assert_eq!(t.title, "Песня");
+        assert_eq!(t.artist.as_deref(), Some("Группа"));
+
+        // без изменений ничего не пишется
+        assert!(lib.edit_track(&id, "Песня", "Группа", T0 + 3).unwrap());
+
+        // пустой исполнитель убирает его
+        lib.edit_track(&id, "Песня", "", T0 + 4).unwrap();
+        assert_eq!(lib.tracks(&rock).unwrap()[0].artist, None);
+        // файл не тронут
+        assert_eq!(
+            fs::read_to_string(lib.root().join("Rock").join("a.mp3")).unwrap(),
+            "not really an mp3"
+        );
     }
 
     #[test]

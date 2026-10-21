@@ -31,6 +31,31 @@ pub fn write_title(path: &Path, title: &str, tmp_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Записывает название и/или исполнителя одной правкой файла.
+/// Пустой исполнитель убирает тег.
+pub fn write_text(
+    path: &Path,
+    title: Option<&str>,
+    artist: Option<&str>,
+    tmp_dir: &Path,
+) -> Result<()> {
+    let title = title.map(|s| s.to_string());
+    let artist = artist.map(|s| s.to_string());
+    edit(path, tmp_dir, move |tag| {
+        if let Some(t) = &title {
+            tag.set_title(t.clone());
+        }
+        if let Some(a) = &artist {
+            if a.is_empty() {
+                tag.remove_artist();
+            } else {
+                tag.set_artist(a.clone());
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Встраивает обложку (jpeg-байты) в теги файла, заменяя прежнюю лицевую.
 pub fn write_cover(path: &Path, jpeg: &[u8], tmp_dir: &Path) -> Result<()> {
     let jpeg = jpeg.to_vec();
@@ -61,7 +86,10 @@ pub fn prepare_cover(image_path: &Path) -> Result<Vec<u8>> {
 
 fn edit(path: &Path, tmp_dir: &Path, change: impl FnOnce(&mut Tag) -> Result<()>) -> Result<()> {
     fs::create_dir_all(tmp_dir)?;
-    let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_default();
     let tmp = tmp_dir.join(format!("edit-{}.{ext}", Uuid::new_v4()));
     fs::copy(path, &tmp)?;
     let result = edit_copy(&tmp, change);
@@ -86,9 +114,12 @@ fn edit_copy(tmp: &Path, change: impl FnOnce(&mut Tag) -> Result<()>) -> Result<
         let tag_type = tagged.primary_tag_type();
         tagged.insert_tag(Tag::new(tag_type));
     }
-    let tag = tagged.primary_tag_mut().ok_or_else(|| lerr("формат не поддерживает теги"))?;
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or_else(|| lerr("формат не поддерживает теги"))?;
     change(tag)?;
-    tag.save_to_path(tmp, WriteOptions::default()).map_err(lerr)?;
+    tag.save_to_path(tmp, WriteOptions::default())
+        .map_err(lerr)?;
     // Проверка: файл с новыми тегами должен читаться.
     lofty::read_from_path(tmp).map_err(lerr)?;
     Ok(())

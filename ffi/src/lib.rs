@@ -188,6 +188,18 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
                 .map_err(es)?;
             Ok(json!({ "tag_written": written }))
         }
+        "edit_track" => {
+            let written = st
+                .lib
+                .edit_track(
+                    &arg_str(args, "track_id")?,
+                    &arg_str(args, "title")?,
+                    &arg_str(args, "artist")?,
+                    now_ms(),
+                )
+                .map_err(es)?;
+            Ok(json!({ "tag_written": written }))
+        }
         "set_cover" => {
             let id = arg_str(args, "track_id")?;
             st.lib

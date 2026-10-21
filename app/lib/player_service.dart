@@ -127,6 +127,18 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     );
   }
 
+  /// Подменяет трек в очереди после правки названия, исполнителя или обложки.
+  void updateTrack(TrackInfo updated) {
+    final i = queue.indexWhere((t) => t.id == updated.id);
+    if (i < 0) return;
+    queue = [...queue]..[i] = updated;
+    if (i == index) {
+      _publish();
+      unawaited(_publishTrack());
+    }
+    notifyListeners();
+  }
+
   /// Обложка трека для уведомления: читается из тегов, пока трек не сменился.
   Future<void> _publishTrack() async {
     final handler = _handler;

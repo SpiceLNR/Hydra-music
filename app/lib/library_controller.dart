@@ -28,6 +28,10 @@ class LibraryController extends ChangeNotifier {
 
   final Map<String, String?> _covers = {};
 
+  /// Растёт, когда у трека изменились название, исполнитель или обложка:
+  /// открытые списки по нему понимают, что их надо перечитать.
+  int tracksRevision = 0;
+
   void _setStatus(LibraryStatus s) {
     status = s;
     notifyListeners();
@@ -162,10 +166,21 @@ class LibraryController extends ChangeNotifier {
     return r is Map<String, dynamic> && r['tag_written'] == true;
   }
 
+  /// Меняет название и исполнителя одной правкой (пустой исполнитель убирает его).
+  /// Возвращает true, если значения записаны и в теги файла.
+  Future<bool> editTrack(String trackId, String title, String artist) async {
+    final r = await Core.call(
+        'edit_track', {'track_id': trackId, 'title': title, 'artist': artist});
+    tracksRevision++;
+    notifyListeners();
+    return r is Map<String, dynamic> && r['tag_written'] == true;
+  }
+
   /// Заменяет обложку: картинка встраивается в сам аудиофайл.
   Future<void> setCover(String trackId, String imagePath) async {
     await Core.call('set_cover', {'track_id': trackId, 'image_path': imagePath});
     _covers.remove(trackId);
+    tracksRevision++;
     notifyListeners();
   }
 

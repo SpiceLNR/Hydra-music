@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../core_bridge.dart';
 import '../library_controller.dart';
@@ -14,8 +13,9 @@ import 'player_screen.dart';
 
 /// Список треков плейлиста.
 ///
-/// Обычный режим: нажатие выбирает трек, внизу кнопки «Играть», «Название», «Обложка»,
-/// «Переместить», «Удалить» (удаление и перемещение с подтверждением).
+/// Обычный режим: нажатие выбирает трек, внизу кнопки «Играть», «Переместить», «Удалить»
+/// (удаление и перемещение с подтверждением). Название, исполнитель и обложка
+/// меняются в окне плеера (шестерёнка).
 /// Пустой плейлист можно удалить кнопкой по центру экрана.
 /// Режим редактирования: включается долгим нажатием на любой трек; порядок меняется
 /// перетаскиванием за зелёную область справа. Кнопка «Готово» (или «назад») выходит из режима.
@@ -39,10 +39,21 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   /// Перестановки идут в ядро строго по очереди, чтобы порядок операций не перепутался.
   Future<void> _reorderQueue = Future<void>.value();
 
+  int _revision = hydraLibrary.tracksRevision;
+
   @override
   void initState() {
     super.initState();
+    hydraLibrary.addListener(_onLibrary);
     _load();
+  }
+
+  /// Название, исполнитель или обложка изменились в плеере: перечитываем список.
+  void _onLibrary() {
+    if (hydraLibrary.tracksRevision != _revision) {
+      _revision = hydraLibrary.tracksRevision;
+      _load();
+    }
   }
 
   TrackInfo? get _selected {
@@ -94,6 +105,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   @override
   void dispose() {
+    hydraLibrary.removeListener(_onLibrary);
     _scroll.dispose();
     super.dispose();
   }
@@ -185,57 +197,6 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     );
     if (!ok) return;
     await _act(() => hydraLibrary.deleteTrack(t.id));
-  }
-
-  Future<void> _rename(TrackInfo t) async {
-    final controller = TextEditingController(text: t.title);
-    final title = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Название трека'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: Metro.inputDecoration(hint: 'Название'),
-        ),
-        actions: [
-          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('Сохранить')),
-        ],
-      ),
-    );
-    if (title == null || title.isEmpty || title == t.title) return;
-    try {
-      final written = await hydraLibrary.renameTrack(t.id, title);
-      if (mounted) {
-        _toast(written
-            ? 'Название записано в файл.'
-            : 'Этот формат не хранит теги: название сохранено только в приложении.');
-      }
-    } on CoreException catch (e) {
-      if (mounted) _toast(e.message);
-    }
-    await _load();
-  }
-
-  Future<void> _changeCover(TrackInfo t) async {
-    final XFile? picked;
-    try {
-      picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-    } catch (e) {
-      if (mounted) _toast('Не удалось открыть выбор картинки: $e');
-      return;
-    }
-    if (picked == null) return;
-    try {
-      await hydraLibrary.setCover(t.id, picked.path);
-      if (mounted) _toast('Обложка записана в файл.');
-    } on CoreException catch (e) {
-      if (mounted) _toast(e.message);
-    }
-    await _load();
   }
 
   Future<void> _deletePlaylist() async {
@@ -432,22 +393,6 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                     label: 'Играть',
                     filled: true,
                     onPressed: () => _play(selected),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: MetroAction(
-                    icon: Icons.edit_outlined,
-                    label: 'Название',
-                    onPressed: () => _rename(selected),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: MetroAction(
-                    icon: Icons.image_outlined,
-                    label: 'Обложка',
-                    onPressed: () => _changeCover(selected),
                   ),
                 ),
                 const SizedBox(width: 4),

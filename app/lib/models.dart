@@ -42,6 +42,17 @@ class TrackInfo {
   final String path;
   final bool isVideo;
 
+  /// Копия с новым названием и/или исполнителем (после правки в окне плеера).
+  TrackInfo copyWith({String? title, String? artist, bool clearArtist = false}) => TrackInfo(
+        id: id,
+        playlistId: playlistId,
+        title: title ?? this.title,
+        artist: clearArtist ? null : (artist ?? this.artist),
+        fileName: fileName,
+        path: path,
+        isVideo: isVideo,
+      );
+
   factory TrackInfo.fromJson(Map<String, dynamic> j) => TrackInfo(
         id: j['track_id'] as String,
         playlistId: j['playlist_id'] as String,

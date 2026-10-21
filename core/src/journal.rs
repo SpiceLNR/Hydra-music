@@ -112,7 +112,11 @@ pub fn apply_remote(conn: &Connection, clock: &mut Clock, op: &Op, now_ms: u64) 
 
 /// Записывает операцию (если её ещё нет) и пересчитывает состояние трека.
 pub fn apply(conn: &Connection, op: &Op, now_ms: u64) -> Result<Applied> {
-    let reason = if op.device_id.is_empty() { "sync" } else { "user" };
+    let reason = if op.device_id.is_empty() {
+        "sync"
+    } else {
+        "user"
+    };
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO ops(op_id, hlc, device_id, kind, track_id, payload)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -138,11 +142,14 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
 
 /// Проигрывает все операции трека по порядку меток и обновляет таблицы tracks/trash.
 fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -> Result<()> {
-    let mut stmt = conn.prepare(
-        "SELECT hlc, kind, payload FROM ops WHERE track_id = ?1 ORDER BY hlc ASC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT hlc, kind, payload FROM ops WHERE track_id = ?1 ORDER BY hlc ASC")?;
     let rows = stmt.query_map([track_id], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })?;
 
     let mut state: Option<TrackState> = None;
@@ -171,7 +178,7 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
                     if let Some(to) = str_field(&payload, "to_playlist_id") {
                         s.playlist_id = to;
                         s.deleted = false; // более поздняя правка возвращает из корзины
-                        // файл мог быть переименован при перемещении (конфликт имён в целевой папке)
+                                           // файл мог быть переименован при перемещении (конфликт имён в целевой папке)
                         if let Some(f) = str_field(&payload, "file_name") {
                             s.file_name = f;
                         }
@@ -197,7 +204,8 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
                         s.title = Some(v);
                     }
                     if let Some(v) = str_field(&payload, "artist") {
-                        s.artist = Some(v);
+                        // пустая строка = исполнитель убран
+                        s.artist = if v.trim().is_empty() { None } else { Some(v) };
                     }
                     if let Some(v) = str_field(&payload, "sha256") {
                         s.sha256 = v;
@@ -235,7 +243,13 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
         conn.execute(
             "INSERT OR IGNORE INTO trash(track_id, file_name, playlist_id, deleted_ms, reason)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![s.track_id, s.file_name, s.playlist_id, now_ms as i64, reason],
+            params![
+                s.track_id,
+                s.file_name,
+                s.playlist_id,
+                now_ms as i64,
+                reason
+            ],
         )?;
     } else {
         conn.execute("DELETE FROM trash WHERE track_id = ?1", [&s.track_id])?;
@@ -298,7 +312,10 @@ pub fn playlist_tracks(conn: &Connection, playlist_id: &str) -> Result<Vec<Track
 /// Ключ для трека, который добавляется в конец плейлиста.
 pub fn append_key(conn: &Connection, playlist_id: &str) -> Result<String> {
     let tracks = playlist_tracks(conn, playlist_id)?;
-    let last = tracks.last().map(|t| t.order_key.as_str()).filter(|k| order::is_valid_key(k));
+    let last = tracks
+        .last()
+        .map(|t| t.order_key.as_str())
+        .filter(|k| order::is_valid_key(k));
     order::key_between(last, None)
 }
 
@@ -323,7 +340,11 @@ pub fn reorder_within(
         .collect();
     let idx = new_index.min(others.len());
 
-    let before = if idx > 0 { Some(others[idx - 1].order_key.as_str()) } else { None };
+    let before = if idx > 0 {
+        Some(others[idx - 1].order_key.as_str())
+    } else {
+        None
+    };
     let after = others.get(idx).map(|t| t.order_key.as_str());
 
     let usable = |k: Option<&str>| k.map_or(true, order::is_valid_key);
@@ -337,8 +358,15 @@ pub fn reorder_within(
         if key == track.order_key {
             return Ok(vec![]);
         }
-        let op = record_local(conn, clock, now_ms, device_id, Kind::Reorder, track_id,
-            json!({ "order_key": key }))?;
+        let op = record_local(
+            conn,
+            clock,
+            now_ms,
+            device_id,
+            Kind::Reorder,
+            track_id,
+            json!({ "order_key": key }),
+        )?;
         return Ok(vec![op]);
     }
 
@@ -352,8 +380,15 @@ pub fn reorder_within(
     let mut ops = Vec::new();
     for ((id, old_key), new_key) in desired.into_iter().zip(keys) {
         if old_key != new_key {
-            ops.push(record_local(conn, clock, now_ms, device_id, Kind::Reorder, &id,
-                json!({ "order_key": new_key }))?);
+            ops.push(record_local(
+                conn,
+                clock,
+                now_ms,
+                device_id,
+                Kind::Reorder,
+                &id,
+                json!({ "order_key": new_key }),
+            )?);
         }
     }
     Ok(ops)
@@ -362,8 +397,10 @@ pub fn reorder_within(
 /// Содержимое скрытого `.<Плейлист>.json`: порядок воспроизведения по UUID треков.
 /// Файл производный: источник правды - журнал, а JSON перегенерируется после синхронизации.
 pub fn manifest_json(conn: &Connection, playlist_id: &str) -> Result<String> {
-    let order: Vec<String> =
-        playlist_tracks(conn, playlist_id)?.into_iter().map(|t| t.track_id).collect();
+    let order: Vec<String> = playlist_tracks(conn, playlist_id)?
+        .into_iter()
+        .map(|t| t.track_id)
+        .collect();
     Ok(serde_json::to_string_pretty(&json!({
         "version": 1,
         "playlist_id": playlist_id,
@@ -444,19 +481,46 @@ mod tests {
 
     fn add(conn: &Connection, clock: &mut Clock, dev: &str, now: u64, track: &str, pl: &str) -> Op {
         // в простых тестах ключом порядка служит сам id трека
-        record_local(conn, clock, now, dev, Kind::Add, track,
-            add_payload(pl, "song.flac", "abc", Some("Song"), None, track)).unwrap()
+        record_local(
+            conn,
+            clock,
+            now,
+            dev,
+            Kind::Add,
+            track,
+            add_payload(pl, "song.flac", "abc", Some("Song"), None, track),
+        )
+        .unwrap()
     }
 
     /// Добавляет трек в конец плейлиста, как это делает приложение.
-    fn add_appended(conn: &Connection, clock: &mut Clock, dev: &str, now: u64, track: &str, pl: &str) -> Op {
+    fn add_appended(
+        conn: &Connection,
+        clock: &mut Clock,
+        dev: &str,
+        now: u64,
+        track: &str,
+        pl: &str,
+    ) -> Op {
         let key = append_key(conn, pl).unwrap();
-        record_local(conn, clock, now, dev, Kind::Add, track,
-            add_payload(pl, "song.flac", "abc", Some(track), None, &key)).unwrap()
+        record_local(
+            conn,
+            clock,
+            now,
+            dev,
+            Kind::Add,
+            track,
+            add_payload(pl, "song.flac", "abc", Some(track), None, &key),
+        )
+        .unwrap()
     }
 
     fn ids(conn: &Connection, pl: &str) -> Vec<String> {
-        playlist_tracks(conn, pl).unwrap().into_iter().map(|t| t.track_id).collect()
+        playlist_tracks(conn, pl)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.track_id)
+            .collect()
     }
 
     #[test]
@@ -464,12 +528,23 @@ mod tests {
         let conn = open_in_memory().unwrap();
         let mut c = Clock::new("A");
         add(&conn, &mut c, "A", 1000, "t1", "rock");
-        record_local(&conn, &mut c, 2000, "A", Kind::Move, "t1", json!({"to_playlist_id": "jazz"})).unwrap();
+        record_local(
+            &conn,
+            &mut c,
+            2000,
+            "A",
+            Kind::Move,
+            "t1",
+            json!({"to_playlist_id": "jazz"}),
+        )
+        .unwrap();
         assert_eq!(get_track(&conn, "t1").unwrap().unwrap().playlist_id, "jazz");
 
         record_local(&conn, &mut c, 3000, "A", Kind::Delete, "t1", json!({})).unwrap();
         assert!(get_track(&conn, "t1").unwrap().unwrap().deleted);
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM trash", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM trash", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1, "удалённый трек должен попасть в корзину");
     }
 
@@ -479,7 +554,9 @@ mod tests {
         let mut c = Clock::new("A");
         let op = add(&conn, &mut c, "A", 1000, "t1", "rock");
         assert_eq!(apply(&conn, &op, 1000).unwrap(), Applied::Duplicate);
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM ops", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ops", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
     }
 
@@ -489,12 +566,24 @@ mod tests {
         let a = open_in_memory().unwrap();
         let mut ca = Clock::new("A");
         let add_op = add(&a, &mut ca, "A", 1000, "t1", "rock");
-        let move_op = record_local(&a, &mut ca, 2000, "A", Kind::Move, "t1", json!({"to_playlist_id": "jazz"})).unwrap();
+        let move_op = record_local(
+            &a,
+            &mut ca,
+            2000,
+            "A",
+            Kind::Move,
+            "t1",
+            json!({"to_playlist_id": "jazz"}),
+        )
+        .unwrap();
 
         let b = open_in_memory().unwrap();
         let mut cb = Clock::new("B");
         apply_remote(&b, &mut cb, &move_op, 5000).unwrap();
-        assert!(get_track(&b, "t1").unwrap().is_none(), "без add состояния ещё нет");
+        assert!(
+            get_track(&b, "t1").unwrap().is_none(),
+            "без add состояния ещё нет"
+        );
         apply_remote(&b, &mut cb, &add_op, 5000).unwrap();
         assert_eq!(get_track(&a, "t1").unwrap(), get_track(&b, "t1").unwrap());
         assert_eq!(get_track(&b, "t1").unwrap().unwrap().playlist_id, "jazz");
@@ -511,8 +600,26 @@ mod tests {
         apply_remote(&b, &mut cb, &add_op, 1100).unwrap();
 
         // Оба устройства независимо перемещают трек
-        let move_a = record_local(&a, &mut ca, 2000, "A", Kind::Move, "t1", json!({"to_playlist_id": "jazz"})).unwrap();
-        let move_b = record_local(&b, &mut cb, 2500, "B", Kind::Move, "t1", json!({"to_playlist_id": "pop"})).unwrap();
+        let move_a = record_local(
+            &a,
+            &mut ca,
+            2000,
+            "A",
+            Kind::Move,
+            "t1",
+            json!({"to_playlist_id": "jazz"}),
+        )
+        .unwrap();
+        let move_b = record_local(
+            &b,
+            &mut cb,
+            2500,
+            "B",
+            Kind::Move,
+            "t1",
+            json!({"to_playlist_id": "pop"}),
+        )
+        .unwrap();
 
         // Обмен операциями
         apply_remote(&a, &mut ca, &move_b, 3000).unwrap();
@@ -533,10 +640,22 @@ mod tests {
         let mut cb = Clock::new("B");
         let add_op = add(&a, &mut ca, "A", 10_000_000, "t1", "rock");
         apply_remote(&b, &mut cb, &add_op, 6_400_000).unwrap(); // у B «сейчас» на час раньше
-        let edit_b = record_local(&b, &mut cb, 6_400_001, "B", Kind::Edit, "t1", json!({"title": "New"})).unwrap();
+        let edit_b = record_local(
+            &b,
+            &mut cb,
+            6_400_001,
+            "B",
+            Kind::Edit,
+            "t1",
+            json!({"title": "New"}),
+        )
+        .unwrap();
         assert!(edit_b.hlc > add_op.hlc);
         apply_remote(&a, &mut ca, &edit_b, 10_000_100).unwrap();
-        assert_eq!(get_track(&a, "t1").unwrap().unwrap().title.as_deref(), Some("New"));
+        assert_eq!(
+            get_track(&a, "t1").unwrap().unwrap().title.as_deref(),
+            Some("New")
+        );
     }
 
     #[test]
@@ -545,10 +664,21 @@ mod tests {
         let mut c = Clock::new("A");
         add(&conn, &mut c, "A", 1000, "t1", "rock");
         record_local(&conn, &mut c, 2000, "A", Kind::Delete, "t1", json!({})).unwrap();
-        record_local(&conn, &mut c, 3000, "A", Kind::Edit, "t1", json!({"title": "Back"})).unwrap();
+        record_local(
+            &conn,
+            &mut c,
+            3000,
+            "A",
+            Kind::Edit,
+            "t1",
+            json!({"title": "Back"}),
+        )
+        .unwrap();
         let t = get_track(&conn, "t1").unwrap().unwrap();
         assert!(!t.deleted);
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM trash", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM trash", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
     }
 
@@ -557,7 +687,16 @@ mod tests {
         let conn = open_in_memory().unwrap();
         let mut c = Clock::new("A");
         add(&conn, &mut c, "A", 1000, "t1", "rock");
-        record_local(&conn, &mut c, 2000, "A", Kind::Edit, "t1", json!({"title": "X"})).unwrap();
+        record_local(
+            &conn,
+            &mut c,
+            2000,
+            "A",
+            Kind::Edit,
+            "t1",
+            json!({"title": "X"}),
+        )
+        .unwrap();
         record_local(&conn, &mut c, 3000, "A", Kind::Delete, "t1", json!({})).unwrap();
         assert!(get_track(&conn, "t1").unwrap().unwrap().deleted);
     }
@@ -583,7 +722,10 @@ mod tests {
         record_local(&conn, &mut c, 2000, "A", Kind::Delete, "t1", json!({})).unwrap();
         let day = 24 * 3600 * 1000u64;
         assert!(expired_trash(&conn, 2000 + 29 * day).unwrap().is_empty());
-        assert_eq!(expired_trash(&conn, 2000 + 31 * day).unwrap(), vec!["t1".to_string()]);
+        assert_eq!(
+            expired_trash(&conn, 2000 + 31 * day).unwrap(),
+            vec!["t1".to_string()]
+        );
         forget_trashed(&conn, "t1").unwrap();
         assert!(expired_trash(&conn, 2000 + 31 * day).unwrap().is_empty());
     }
@@ -593,8 +735,16 @@ mod tests {
         let conn = open_in_memory().unwrap();
         let mut c = Clock::new("A");
         add(&conn, &mut c, "A", 1000, "t1", "rock");
-        record_local(&conn, &mut c, 2000, "A", Kind::Move, "t1",
-            json!({"to_playlist_id": "jazz", "file_name": "song (2).flac"})).unwrap();
+        record_local(
+            &conn,
+            &mut c,
+            2000,
+            "A",
+            Kind::Move,
+            "t1",
+            json!({"to_playlist_id": "jazz", "file_name": "song (2).flac"}),
+        )
+        .unwrap();
         let t = get_track(&conn, "t1").unwrap().unwrap();
         assert_eq!(t.playlist_id, "jazz");
         assert_eq!(t.file_name, "song (2).flac");
@@ -628,7 +778,9 @@ mod tests {
         // индекс за пределами = в конец; то же место = без операций
         reorder_within(&conn, &mut c, 2002, "A", "c", 99).unwrap();
         assert_eq!(ids(&conn, "rock"), ["b", "a", "c"]);
-        assert!(reorder_within(&conn, &mut c, 2003, "A", "c", 2).unwrap().is_empty());
+        assert!(reorder_within(&conn, &mut c, 2003, "A", "c", 2)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -669,7 +821,11 @@ mod tests {
         for op in &ops_a {
             apply_remote(&b, &mut cb, op, 3000).unwrap();
         }
-        assert_eq!(ids(&a, "rock"), ids(&b, "rock"), "порядок должен совпасть на обоих устройствах");
+        assert_eq!(
+            ids(&a, "rock"),
+            ids(&b, "rock"),
+            "порядок должен совпасть на обоих устройствах"
+        );
         assert_eq!(ids(&a, "rock").len(), 3);
     }
 
@@ -682,8 +838,10 @@ mod tests {
         // оба устройства одновременно добавляют в пустой плейлист -> одинаковый ключ
         let op_x = add_appended(&a, &mut ca, "A", 1000, "x", "rock");
         let op_y = add_appended(&b, &mut cb, "B", 1000, "y", "rock");
-        assert_eq!(get_track(&a, "x").unwrap().unwrap().order_key,
-                   get_track(&b, "y").unwrap().unwrap().order_key);
+        assert_eq!(
+            get_track(&a, "x").unwrap().unwrap().order_key,
+            get_track(&b, "y").unwrap().unwrap().order_key
+        );
         apply_remote(&a, &mut ca, &op_y, 2000).unwrap();
         apply_remote(&b, &mut cb, &op_x, 2000).unwrap();
         assert_eq!(ids(&a, "rock"), ["x", "y"]);
@@ -708,7 +866,16 @@ mod tests {
         let mut c = Clock::new("A");
         add_appended(&conn, &mut c, "A", 1000, "a", "rock");
         record_local(&conn, &mut c, 2000, "A", Kind::Delete, "a", json!({})).unwrap();
-        record_local(&conn, &mut c, 3000, "A", Kind::Reorder, "a", json!({"order_key": "z"})).unwrap();
+        record_local(
+            &conn,
+            &mut c,
+            3000,
+            "A",
+            Kind::Reorder,
+            "a",
+            json!({"order_key": "z"}),
+        )
+        .unwrap();
         assert!(get_track(&conn, "a").unwrap().unwrap().deleted);
         assert!(ids(&conn, "rock").is_empty());
     }
@@ -725,8 +892,16 @@ mod tests {
 
         // перемещение «a» в конец плейлиста jazz с указанной позицией
         let key = append_key(&conn, "jazz").unwrap();
-        record_local(&conn, &mut c, 3000, "A", Kind::Move, "a",
-            json!({"to_playlist_id": "jazz", "order_key": key})).unwrap();
+        record_local(
+            &conn,
+            &mut c,
+            3000,
+            "A",
+            Kind::Move,
+            "a",
+            json!({"to_playlist_id": "jazz", "order_key": key}),
+        )
+        .unwrap();
         assert_eq!(ids(&conn, "rock"), ["c"]);
         assert_eq!(ids(&conn, "jazz"), ["a"]);
     }
