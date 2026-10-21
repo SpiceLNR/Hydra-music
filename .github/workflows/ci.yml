@@ -93,9 +93,10 @@ jobs:
           df -h /
       # Для повседневного использования: быстрее и экономнее к батарее, чем debug.
       # Подписывается отладочным ключом Flutter: подходит для личной установки.
+      # --no-shrink: R8 вырезает из релиза классы распознавания QR (ML Kit), камера не открывается
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release --dart-define=HYDRA_BUILD=${{ github.sha }}
+        run: flutter build apk --release --no-shrink --dart-define=HYDRA_BUILD=${{ github.sha }}
       # Основной способ получить APK: страница Releases -> «Latest build».
       # Файлы релиза не входят в квоту хранилища артефактов.
       - name: Publish APK to the latest release
