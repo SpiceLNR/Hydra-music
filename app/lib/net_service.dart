@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
 import 'library_controller.dart';
@@ -25,13 +26,11 @@ class PairLink {
   final int port;
   final List<String> addrs;
 
-  /// `hydra://pair?d=..&n=..&k=..&s=..&p=..&a=ip1,ip2`
+  /// `hydra://pair?k=..&s=..&p=..&a=ip1,ip2` (короче код = проще считывается камерой).
   String toUri() => Uri(
         scheme: 'hydra',
         host: 'pair',
         queryParameters: {
-          'd': deviceId,
-          'n': name,
           'k': publicKey,
           's': secret,
           'p': '$port',
@@ -73,6 +72,11 @@ class NetService extends ChangeNotifier {
   /// Растёт, когда в семью добавлено устройство (экран показа QR по нему закрывается).
   int familyGeneration = 0;
 
+  /// Служба переднего плана (Android): не даёт телефону усыпить сеть при погасшем экране.
+  static const MethodChannel _service = MethodChannel('hydra/sync_service');
+  bool _serviceOn = false;
+  DateTime _serviceStarted = DateTime.fromMillisecondsSinceEpoch(0);
+
   int? _generation;
   int _watchers = 0;
   Timer? _timer;
@@ -82,6 +86,24 @@ class NetService extends ChangeNotifier {
     if (Platform.isAndroid) return 'Телефон';
     final host = Platform.localHostname;
     return host.isEmpty ? 'Компьютер' : host;
+  }
+
+  Future<void> _keepAwake(bool on, [String text = '']) async {
+    if (!Platform.isAndroid) return;
+    if (on == _serviceOn) return;
+    if (!on && DateTime.now().difference(_serviceStarted) < const Duration(seconds: 5)) {
+      return; // задача только запущена: не успела отметиться занятой
+    }
+    _serviceOn = on;
+    if (on) _serviceStarted = DateTime.now();
+    try {
+      final ok = await _service.invokeMethod<bool>(on ? 'start' : 'stop', {'text': text});
+      if (on && ok == false) _serviceOn = false; // Android не разрешил (например, из фона)
+    } on PlatformException {
+      _serviceOn = false;
+    } on MissingPluginException {
+      _serviceOn = false;
+    }
   }
 
   Future<void> start() async {
@@ -130,6 +152,7 @@ class NetService extends ChangeNotifier {
       final gen = (st['generation'] as num).toInt();
       busy = st['busy'] as bool;
       message = st['message'] as String;
+      unawaited(_keepAwake(busy, message));
       error = st['error'] as String;
       log = (st['log'] as List).cast<String>();
       familyGeneration = (st['family_generation'] as num).toInt();
@@ -196,6 +219,7 @@ class NetService extends ChangeNotifier {
   /// Подключается к устройству, показавшему QR, и сразу синхронизируется с ним.
   Future<void> pairWith(PairLink link) async {
     await start();
+    await _keepAwake(true, 'Сопряжение');
     try {
       await Core.call('net_pair_connect', {
         'addrs': [for (final a in link.addrs) '$a:${link.port}'],
@@ -205,6 +229,8 @@ class NetService extends ChangeNotifier {
       error = '';
     } on CoreException catch (e) {
       error = e.message;
+      _serviceStarted = DateTime.fromMillisecondsSinceEpoch(0);
+      await _keepAwake(false);
     }
     notifyListeners();
     _schedule();
@@ -212,11 +238,14 @@ class NetService extends ChangeNotifier {
   }
 
   Future<void> sync(DeviceInfo d) async {
+    await _keepAwake(true, 'Синхронизация с «${d.name}»');
     try {
       await Core.call('net_sync', {'device_id': d.id});
       error = '';
     } on CoreException catch (e) {
       error = e.message;
+      _serviceStarted = DateTime.fromMillisecondsSinceEpoch(0);
+      await _keepAwake(false);
     }
     notifyListeners();
     _schedule();

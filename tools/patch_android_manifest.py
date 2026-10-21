@@ -68,6 +68,128 @@ SERVICE_XML = """        <service android:name="com.ryanheise.audioservice.Audio
 """
 
 
+SYNC_SERVICE_XML = """        <service android:name=".SyncService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false"/>
+"""
+
+SYNC_SERVICE_KT = """package __PKG__
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+
+/** Служба переднего плана на время синхронизации: не даёт телефону усыпить процесс и сеть,
+ *  когда экран погас. Живёт только пока идёт обмен. */
+class SyncService : Service() {
+    private var wake: PowerManager.WakeLock? = null
+    private var wifi: WifiManager.WifiLock? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val channelId = "hydra_sync"
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(channelId, "Синхронизация", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val text = intent?.getStringExtra("text") ?: "Синхронизация"
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        val notification = builder
+            .setContentTitle("Hydra Music")
+            .setContentText(if (text.isEmpty()) "Синхронизация" else text)
+            .setSmallIcon(applicationInfo.icon)
+            .setOngoing(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(4711, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(4711, notification)
+        }
+        if (wake == null) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hydra:sync").apply {
+                setReferenceCounted(false)
+                acquire(60 * 60 * 1000L)
+            }
+        }
+        if (wifi == null) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            wifi = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "hydra:sync").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        wake?.let { if (it.isHeld) it.release() }
+        wifi?.let { if (it.isHeld) it.release() }
+        wake = null
+        wifi = null
+        super.onDestroy()
+    }
+}
+"""
+
+MAIN_ACTIVITY_KT = """package __PKG__
+
+import android.content.Intent
+import android.os.Build
+import com.ryanheise.audioservice.AudioServiceActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity : AudioServiceActivity() {
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hydra/sync_service")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        try {
+                            val intent = Intent(this, SyncService::class.java)
+                            intent.putExtra("text", call.argument<String>("text") ?: "")
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            // из фона Android не разрешает запускать такую службу
+                            result.success(false)
+                        }
+                    }
+                    "stop" -> {
+                        stopService(Intent(this, SyncService::class.java))
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+}
+"""
+
+
 def patch_manifest() -> int:
     if not MANIFEST.exists():
         print(f"Не найден {MANIFEST}. Сначала выполните: flutter create --platforms=android,windows .")
@@ -102,6 +224,11 @@ def patch_manifest() -> int:
     else:
         print("Фоновая служба: уже на месте")
 
+    if "SyncService" not in text:
+        end = text.rfind("</application>")
+        text = text[:end] + SYNC_SERVICE_XML + "    " + text[end:]
+        print("Служба синхронизации: добавлена")
+
     text = re.sub(r'android:label="[^"]*"', f'android:label="{APP_LABEL}"', text, count=1)
     if 'android:icon="@mipmap/ic_launcher"' not in text:
         text = re.sub(r'(<application\b)', r'\1 android:icon="@mipmap/ic_launcher"', text, count=1)
@@ -112,21 +239,25 @@ def patch_manifest() -> int:
 
 
 def patch_activity() -> int:
-    files = list(MAIN_DIR.rglob("MainActivity.kt")) + list(MAIN_DIR.rglob("MainActivity.java"))
+    files = list(MAIN_DIR.rglob("MainActivity.kt"))
     if not files:
-        print("MainActivity не найдена.")
+        print("MainActivity.kt не найдена.")
         return 1
     for f in files:
         t = f.read_text(encoding="utf-8")
-        if "AudioServiceActivity" in t:
-            print("MainActivity: уже AudioServiceActivity")
-            continue
-        t = t.replace(
-            "io.flutter.embedding.android.FlutterActivity",
-            "com.ryanheise.audioservice.AudioServiceActivity",
-        ).replace("FlutterActivity", "AudioServiceActivity")
-        f.write_text(t, encoding="utf-8")
-        print("MainActivity: заменена на AudioServiceActivity")
+        m = re.search(r"^package\s+([\w.]+)", t, flags=re.MULTILINE)
+        if not m:
+            print("В MainActivity.kt нет строки package.")
+            return 1
+        pkg = m.group(1)
+        if "hydra/sync_service" not in t:
+            f.write_text(MAIN_ACTIVITY_KT.replace("__PKG__", pkg), encoding="utf-8")
+            print("MainActivity: AudioServiceActivity + канал службы синхронизации")
+        else:
+            print("MainActivity: уже настроена")
+        svc = f.parent / "SyncService.kt"
+        svc.write_text(SYNC_SERVICE_KT.replace("__PKG__", pkg), encoding="utf-8")
+        print("SyncService.kt: записан")
     return 0
 
 
@@ -201,7 +332,8 @@ def patch_windows() -> int:
     flutter_window = pathlib.Path("windows/runner/flutter_window.cpp")
     if flutter_window.exists():
         text = flutter_window.read_text(encoding="utf-8")
-        new = re.sub(r"^(\s*)this->Show\(\);", r"\1// this->Show();  // показывает DockController.reveal", text, flags=re.MULTILINE)
+        # блочный комментарий: работает и когда вызов стоит в одной строке с `});`
+        new = re.sub(r"(?<!/\* )this->Show\(\);", "/* this->Show(); */", text)
         if new != text:
             flutter_window.write_text(new, encoding="utf-8")
             print("Окно Windows: не показывается до первого кадра")

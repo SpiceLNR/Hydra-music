@@ -85,7 +85,7 @@ class _PairOfferScreenState extends State<PairOfferScreen> {
                 padding: const EdgeInsets.all(12),
                 child: QrImageView(
                   data: link.toUri(),
-                  size: 260,
+                  size: 300,
                   backgroundColor: Colors.white,
                 ),
               ),
@@ -129,19 +129,35 @@ class PairScanScreen extends StatefulWidget {
 }
 
 class _PairScanScreenState extends State<PairScanScreen> {
+  final MobileScannerController _controller = MobileScannerController(
+    formats: const [BarcodeFormat.qrCode],
+  );
   bool _handled = false;
+  String _hint = 'Наведите камеру на QR-код на втором устройстве';
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (_handled) return;
     for (final b in capture.barcodes) {
-      final link = PairLink.parse(b.rawValue ?? '');
-      if (link == null) continue;
+      final raw = b.rawValue ?? '';
+      final link = PairLink.parse(raw);
+      if (link == null) {
+        if (raw.isNotEmpty && mounted) {
+          setState(() => _hint = 'QR прочитан, но это не код сопряжения Hydra Music');
+        }
+        continue;
+      }
       _handled = true;
       await hydraNet.pairWith(link);
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Подключаюсь к «${link.name}»...')),
+        const SnackBar(content: Text('Подключаюсь к устройству...')),
       );
       return;
     }
@@ -151,17 +167,43 @@ class _PairScanScreenState extends State<PairScanScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('сканировать QR')),
-      body: Stack(
+      body: Column(
         children: [
-          MobileScanner(onDetect: _onDetect),
-          const Align(
-            alignment: Alignment.bottomCenter,
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'Наведите камеру на QR-код на втором устройстве',
-                style: TextStyle(backgroundColor: Colors.black54),
-              ),
+          Expanded(
+            child: MobileScanner(
+              controller: _controller,
+              onDetect: _onDetect,
+              errorBuilder: (context, error, child) {
+                final details = error.errorDetails?.message;
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'Камера недоступна: ${error.errorCode.name}'
+                      '${details == null ? '' : '\n$details'}',
+                      style: const TextStyle(color: Metro.danger),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(_hint),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () async {
+                    final started = await showPasteDialog(context);
+                    if (started && context.mounted) Navigator.of(context).pop();
+                  },
+                  child: const Text('Ввести ссылку вручную'),
+                ),
+              ],
             ),
           ),
         ],
@@ -171,7 +213,7 @@ class _PairScanScreenState extends State<PairScanScreen> {
 }
 
 /// Ввод ссылки сопряжения вручную (удобно на ПК, где нет камеры).
-Future<void> showPasteDialog(BuildContext context) async {
+Future<bool> showPasteDialog(BuildContext context) async {
   final controller = TextEditingController();
   final text = await showDialog<String>(
     context: context,
@@ -194,13 +236,14 @@ Future<void> showPasteDialog(BuildContext context) async {
     ),
   );
   controller.dispose();
-  if (text == null || !context.mounted) return;
+  if (text == null || !context.mounted) return false;
   final link = PairLink.parse(text);
   if (link == null) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Это не похоже на ссылку сопряжения')),
     );
-    return;
+    return false;
   }
   await hydraNet.pairWith(link);
+  return true;
 }
