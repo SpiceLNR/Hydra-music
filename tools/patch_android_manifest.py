@@ -284,6 +284,9 @@ def patch_gradle() -> int:
         # Kotlin компилируется внутри процесса Gradle: фоновый демон Kotlin на сборке
         # release падал с «Daemon compilation failed».
         "kotlin.compiler.execution.strategy=in-process",
+        # QR-сканер: модель распознавания кладётся прямо в приложение и не зависит
+        # от сервисов Google Play на телефоне
+        "dev.steenbakker.mobile_scanner.useUnbundled=false",
     ]
     added = [w for w in wanted if w not in props]
     if added:
