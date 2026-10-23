@@ -303,7 +303,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     // ---------- исходящие ----------
 
     fn connect(addrs: &[String]) -> Result<(TcpStream, String)> {
-        let mut last = bad("нет адреса устройства");
+        let mut errors: Vec<String> = Vec::new();
         for a in addrs {
             let Ok(sa) = a.parse::<SocketAddr>() else {
                 continue;
@@ -314,10 +314,13 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     let _ = s.set_write_timeout(Some(Duration::from_secs(20)));
                     return Ok((s, a.clone()));
                 }
-                Err(e) => last = bad(format!("не удалось подключиться к {a}: {e}")),
+                Err(e) => errors.push(format!("{a}: {e}")),
             }
         }
-        Err(last)
+        if errors.is_empty() {
+            return Err(bad("нет адреса устройства"));
+        }
+        Err(bad(format!("не удалось подключиться ({})", errors.join("; "))))
     }
 
     /// Запускает задачу в фоне. Состояние смотрите через `status`.
