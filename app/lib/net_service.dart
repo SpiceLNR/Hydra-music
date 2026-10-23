@@ -126,14 +126,10 @@ class NetService extends ChangeNotifier {
     if (raw == null || raw.isEmpty) return;
     final link = PairLink.parse(raw);
     if (link == null) {
-      messengerKey.currentState?.showSnackBar(
-        const SnackBar(content: Text('Это не ссылка сопряжения Hydra Music')),
-      );
+      showAppMessage('Это не ссылка сопряжения Hydra Music');
       return;
     }
-    messengerKey.currentState?.showSnackBar(
-      const SnackBar(content: Text('Подключаюсь к устройству...')),
-    );
+    showAppMessage('Подключаюсь к устройству...');
     await pairWith(link);
   }
 
