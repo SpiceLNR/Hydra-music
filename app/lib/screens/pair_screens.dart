@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:camera/camera.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:zxing2/qrcode.dart';
 
+import '../app_messenger.dart';
 import '../core_bridge.dart';
 import '../net_service.dart';
 import '../theme.dart';
@@ -129,66 +133,126 @@ class PairScanScreen extends StatefulWidget {
 }
 
 class _PairScanScreenState extends State<PairScanScreen> {
-  final MobileScannerController _controller = MobileScannerController(
-    formats: const [BarcodeFormat.qrCode],
-  );
+  CameraController? _camera;
+  String? _error;
   bool _handled = false;
+  bool _busy = false; // кадр сейчас разбирается: остальные пропускаем
   String _hint = 'Наведите камеру на QR-код на втором устройстве';
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    unawaited(_open());
   }
 
-  Future<void> _onDetect(BarcodeCapture capture) async {
-    if (_handled) return;
-    for (final b in capture.barcodes) {
-      final raw = b.rawValue ?? '';
-      final link = PairLink.parse(raw);
-      if (link == null) {
-        if (raw.isNotEmpty && mounted) {
-          setState(() => _hint = 'QR прочитан, но это не код сопряжения Hydra Music');
-        }
-        continue;
+  Future<void> _open() async {
+    try {
+      final cams = await availableCameras();
+      if (cams.isEmpty) {
+        if (mounted) setState(() => _error = 'Камера не найдена');
+        return;
       }
-      _handled = true;
-      await hydraNet.pairWith(link);
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Подключаюсь к устройству...')),
+      final cam = cams.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cams.first,
       );
-      return;
+      final controller = CameraController(
+        cam,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      _camera = controller;
+      setState(() {});
+      await controller.startImageStream(_onFrame);
+    } on CameraException catch (e) {
+      if (mounted) setState(() => _error = '${e.code}\n${e.description ?? ''}');
+    } on Object catch (e) {
+      if (mounted) setState(() => _error = '$e');
     }
   }
 
   @override
+  void dispose() {
+    final c = _camera;
+    _camera = null;
+    if (c != null) {
+      unawaited(() async {
+        try {
+          if (c.value.isStreamingImages) await c.stopImageStream();
+        } on Object {
+          // камера уже закрыта
+        }
+        await c.dispose();
+      }());
+    }
+    super.dispose();
+  }
+
+  void _onFrame(CameraImage image) {
+    if (_busy || _handled) return;
+    _busy = true;
+    final plane = image.planes.first; // яркость (Y): для QR цвет не нужен
+    final frame = _Frame(
+      Uint8List.fromList(plane.bytes),
+      image.width,
+      image.height,
+      plane.bytesPerRow,
+    );
+    unawaited(() async {
+      try {
+        final text = await Isolate.run(() => _decodeQr(frame));
+        if (text != null) await _onText(text);
+      } on Object {
+        // кадр не разобрался: ждём следующий
+      } finally {
+        _busy = false;
+      }
+    }());
+  }
+
+  Future<void> _onText(String raw) async {
+    if (_handled || !mounted) return;
+    final link = PairLink.parse(raw);
+    if (link == null) {
+      setState(() => _hint = 'QR прочитан, но это не код сопряжения Hydra Music');
+      return;
+    }
+    _handled = true;
+    await hydraNet.pairWith(link);
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    showAppMessage('Подключаюсь к устройству...');
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final camera = _camera;
     return Scaffold(
       appBar: AppBar(title: const Text('сканировать QR')),
       body: Column(
         children: [
           Expanded(
-            child: MobileScanner(
-              controller: _controller,
-              onDetect: _onDetect,
-              errorBuilder: (context, error, child) {
-                final details = error.errorDetails?.message;
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Камера недоступна: ${error.errorCode.name}'
-                      '${details == null ? '' : '\n$details'}'
-                      '\n\nНа телефоне без сервисов Google можно сканировать QR обычной '
-                      'камерой телефона: ссылка откроется в Hydra Music сама.',
-                      style: const TextStyle(color: Metro.danger),
+            child: _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        'Камера недоступна: $_error',
+                        style: const TextStyle(color: Metro.danger),
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
+                  )
+                : camera == null || !camera.value.isInitialized
+                    ? const Center(child: CircularProgressIndicator())
+                    : ClipRect(
+                        child: Center(child: CameraPreview(camera)),
+                      ),
           ),
           Padding(
             padding: const EdgeInsets.all(16),
@@ -212,6 +276,40 @@ class _PairScanScreenState extends State<PairScanScreen> {
       ),
     );
   }
+}
+
+/// Кадр с камеры: только яркость.
+class _Frame {
+  const _Frame(this.bytes, this.width, this.height, this.stride);
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final int stride;
+}
+
+/// Ищет QR-код в кадре (чистый Dart, без сервисов Google). Выполняется в отдельном потоке.
+String? _decodeQr(_Frame f) {
+  final px = Int32List(f.width * f.height);
+  for (var y = 0; y < f.height; y++) {
+    final row = y * f.stride;
+    final out = y * f.width;
+    for (var x = 0; x < f.width; x++) {
+      final g = f.bytes[row + x];
+      px[out + x] = 0xFF000000 | (g << 16) | (g << 8) | g;
+    }
+  }
+  final source = RGBLuminanceSource(f.width, f.height, px);
+  for (final bitmap in [
+    BinaryBitmap(HybridBinarizer(source)),
+    BinaryBitmap(GlobalHistogramBinarizer(source)),
+  ]) {
+    try {
+      return QRCodeReader().decode(bitmap).text;
+    } on Object {
+      // в кадре нет читаемого кода
+    }
+  }
+  return null;
 }
 
 /// Ввод ссылки сопряжения вручную (удобно на ПК, где нет камеры).
