@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
@@ -137,6 +137,8 @@ class _PairScanScreenState extends State<PairScanScreen> {
   String? _error;
   bool _handled = false;
   bool _busy = false; // кадр сейчас разбирается: остальные пропускаем
+  int _frames = 0;
+  String _status = '';
   String _hint = 'Наведите камеру на QR-код на втором устройстве';
 
   @override
@@ -206,10 +208,15 @@ class _PairScanScreenState extends State<PairScanScreen> {
     );
     unawaited(() async {
       try {
-        final text = await Isolate.run(() => _decodeQr(frame));
+        // top-level функция без замыкания: в поток уходит только кадр, а не экран
+        final text = await compute(_decodeQr, frame);
+        _frames++;
+        if (mounted && _frames % 5 == 0 && !_handled) {
+          setState(() => _status = 'кадров проверено: $_frames');
+        }
         if (text != null) await _onText(text);
-      } on Object {
-        // кадр не разобрался: ждём следующий
+      } on Object catch (e) {
+        if (mounted && !_handled) setState(() => _status = 'ошибка разбора: $e');
       } finally {
         _busy = false;
       }
@@ -261,6 +268,8 @@ class _PairScanScreenState extends State<PairScanScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(_hint),
+                if (_status.isNotEmpty)
+                  Text(_status, style: const TextStyle(fontSize: 12, color: Metro.textDim)),
                 const SizedBox(height: 12),
                 OutlinedButton(
                   onPressed: () async {
