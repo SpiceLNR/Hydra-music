@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'app_messenger.dart';
 import 'core_bridge.dart';
 import 'library_controller.dart';
 import 'models.dart';
@@ -106,8 +107,39 @@ class NetService extends ChangeNotifier {
     }
   }
 
+  /// Ссылки hydra://pair?..., открытые системной камерой или браузером (Android).
+  Future<void> _listenLinks() async {
+    if (!Platform.isAndroid) return;
+    _service.setMethodCallHandler((call) async {
+      if (call.method == 'link') await _openLink(call.arguments as String?);
+    });
+    try {
+      await _openLink(await _service.invokeMethod<String>('initialLink'));
+    } on PlatformException {
+      // без ссылки просто работаем дальше
+    } on MissingPluginException {
+      // нет нативной части
+    }
+  }
+
+  Future<void> _openLink(String? raw) async {
+    if (raw == null || raw.isEmpty) return;
+    final link = PairLink.parse(raw);
+    if (link == null) {
+      messengerKey.currentState?.showSnackBar(
+        const SnackBar(content: Text('Это не ссылка сопряжения Hydra Music')),
+      );
+      return;
+    }
+    messengerKey.currentState?.showSnackBar(
+      const SnackBar(content: Text('Подключаюсь к устройству...')),
+    );
+    await pairWith(link);
+  }
+
   Future<void> start() async {
     if (started) return;
+    unawaited(_listenLinks());
     deviceName = _defaultName();
     try {
       await Core.call('net_start', {'name': deviceName});

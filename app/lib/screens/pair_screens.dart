@@ -180,7 +180,9 @@ class _PairScanScreenState extends State<PairScanScreen> {
                     padding: const EdgeInsets.all(24),
                     child: Text(
                       'Камера недоступна: ${error.errorCode.name}'
-                      '${details == null ? '' : '\n$details'}',
+                      '${details == null ? '' : '\n$details'}'
+                      '\n\nНа телефоне без сервисов Google можно сканировать QR обычной '
+                      'камерой телефона: ссылка откроется в Hydra Music сама.',
                       style: const TextStyle(color: Metro.danger),
                     ),
                   ),

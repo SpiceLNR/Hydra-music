@@ -68,6 +68,16 @@ SERVICE_XML = """        <service android:name="com.ryanheise.audioservice.Audio
 """
 
 
+LINK_XML = """            <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="hydra" android:host="pair"/>
+            </intent-filter>
+"""
+
+
 SYNC_SERVICE_XML = """        <service android:name=".SyncService"
             android:foregroundServiceType="dataSync"
             android:exported="false"/>
@@ -158,11 +168,36 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
+    private var channel: MethodChannel? = null
+    private var pendingLink: String? = null
+
+    private fun linkOf(intent: Intent?): String? {
+        val data = intent?.data ?: return null
+        return if (data.scheme == "hydra") data.toString() else null
+    }
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        pendingLink = linkOf(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val link = linkOf(intent) ?: return
+        val ch = channel
+        if (ch != null) ch.invokeMethod("link", link) else pendingLink = link
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hydra/sync_service")
-            .setMethodCallHandler { call, result ->
+        val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hydra/sync_service")
+        channel = ch
+        ch.setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "initialLink" -> {
+                        result.success(pendingLink)
+                        pendingLink = null
+                    }
                     "start" -> {
                         try {
                             val intent = Intent(this, SyncService::class.java)
@@ -224,6 +259,12 @@ def patch_manifest() -> int:
     else:
         print("Фоновая служба: уже на месте")
 
+    if 'android:scheme="hydra"' not in text:
+        end = text.find("</activity>")
+        if end != -1:
+            text = text[:end] + LINK_XML + "        " + text[end:]
+            print("Ссылки hydra://pair: добавлены")
+
     if "SyncService" not in text:
         end = text.rfind("</application>")
         text = text[:end] + SYNC_SERVICE_XML + "    " + text[end:]
@@ -250,7 +291,7 @@ def patch_activity() -> int:
             print("В MainActivity.kt нет строки package.")
             return 1
         pkg = m.group(1)
-        if "hydra/sync_service" not in t:
+        if "initialLink" not in t:
             f.write_text(MAIN_ACTIVITY_KT.replace("__PKG__", pkg), encoding="utf-8")
             print("MainActivity: AudioServiceActivity + канал службы синхронизации")
         else:

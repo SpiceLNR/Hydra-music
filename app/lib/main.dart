@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'app_messenger.dart';
+import 'desktop/collapsed_strip.dart';
 import 'desktop/desktop_settings.dart';
 import 'desktop/desktop_shell.dart';
 import 'desktop/dock_controller.dart';
@@ -41,6 +42,21 @@ class HydraApp extends StatelessWidget {
       scaffoldMessengerKey: messengerKey,
       debugShowCheckedModeBanner: false,
       theme: Metro.theme(),
+      // Windows: в свёрнутом виде поверх всего (в том числе поверх открытых экранов
+      // «Устройства»/«Настройки») показывается только кнопка-стрелка; навигатор остаётся
+      // под ней скрытым, поэтому после разворачивания экран на месте.
+      builder: Platform.isWindows
+          ? (context, child) => ValueListenableBuilder<bool>(
+                valueListenable: DockController.instance.collapsed,
+                builder: (context, collapsed, _) => Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Offstage(offstage: collapsed, child: child),
+                    if (collapsed) const CollapsedStrip(),
+                  ],
+                ),
+              )
+          : null,
       home: Platform.isWindows ? const DesktopShell() : const HomeScreen(),
     );
   }
