@@ -12,12 +12,14 @@ class MetroVSlider extends StatelessWidget {
     required this.onChanged,
     this.onChangeEnd,
     this.max = 100,
+    this.color = Metro.green,
   });
 
   final double value;
   final double max;
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeEnd;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -53,7 +55,7 @@ class MetroVSlider extends StatelessWidget {
                 alignment: Alignment.bottomCenter,
                 children: [
                   Container(width: 4, height: h, color: Colors.white24),
-                  Container(width: 4, height: h * frac, color: Metro.green),
+                  Container(width: 4, height: h * frac, color: color),
                   Positioned(
                     bottom: thumbBottom,
                     child: Container(width: 18, height: 10, color: Colors.white),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -10,6 +11,11 @@ import 'audio_handler.dart';
 import 'file_probe.dart';
 import 'library_controller.dart';
 import 'models.dart';
+
+/// Режим порядка воспроизведения (слева направо в переключателе).
+/// [repeat] - один трек по кругу; [standard] - плейлист по кругу;
+/// [shuffle] - случайный порядок плейлиста; [anarchy] - случайный порядок всех плейлистов.
+enum PlayMode { repeat, standard, shuffle, anarchy }
 
 /// Воспроизведение очереди (порядок плейлиста). Звук ведёт [AudioEngine]: на Android
 /// ExoPlayer, на Windows mpv.
@@ -39,6 +45,13 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
 
   /// Громкость 0..100 (на Windows её меняет вертикальная полоса в шторке).
   double volume = 100;
+
+  /// Текущий режим. При запуске приложения всегда «Стандартный».
+  PlayMode mode = PlayMode.standard;
+  final Random _rng = Random();
+
+  /// Порядок плейлиста, из которого запущена музыка (нужен, чтобы вернуться из случайных режимов).
+  List<TrackInfo> _base = const [];
 
   List<TrackInfo> queue = const [];
   int index = 0;
@@ -109,8 +122,9 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
       });
     }
     _errorStreak++;
-    if (_engine.skipOnError && _errorStreak <= 5 && index < queue.length - 1) {
-      Future<void>.delayed(const Duration(milliseconds: 300), () => _engine.next());
+    if (_engine.skipOnError && _errorStreak <= 5 && queue.length > 1) {
+      Future<void>.delayed(
+          const Duration(milliseconds: 300), () => _engine.jumpTo((index + 1) % queue.length));
     }
   }
 
@@ -132,6 +146,8 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     final i = queue.indexWhere((t) => t.id == updated.id);
     if (i < 0) return;
     queue = [...queue]..[i] = updated;
+    final b = _base.indexWhere((t) => t.id == updated.id);
+    if (b >= 0) _base = [..._base]..[b] = updated;
     if (i == index) {
       _publish();
       unawaited(_publishTrack());
@@ -154,12 +170,42 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     handler.setTrack(track, cover == null ? null : Uri.file(cover));
   }
 
-  /// Запускает очередь с позиции [start]; порядок треков - порядок плейлиста.
+  bool get _random => mode == PlayMode.shuffle || mode == PlayMode.anarchy;
+
+  /// Все треки всех плейлистов (для «Анархии»).
+  Future<List<TrackInfo>> _everything() async {
+    final all = <TrackInfo>[];
+    for (final p in List.of(hydraLibrary.playlists)) {
+      try {
+        all.addAll(await hydraLibrary.tracks(p.id));
+      } on Object {
+        // плейлист не прочитался: играем остальные
+      }
+    }
+    return all;
+  }
+
+  /// Случайный порядок: [first] ставится первым, остальные перемешиваются заново.
+  List<TrackInfo> _shuffled(List<TrackInfo> pool, TrackInfo? first) {
+    final rest = [for (final t in pool) if (t.id != first?.id) t]..shuffle(_rng);
+    return [if (first != null) first, ...rest];
+  }
+
+  /// Запускает очередь с позиции [start]. Порядок: плейлиста, а в режимах «Разнобой»
+  /// и «Анархия» случайный, начиная с выбранного трека.
   Future<void> playQueue(List<TrackInfo> tracks, int start) async {
     if (tracks.isEmpty) return;
     _wire();
-    queue = List.of(tracks);
-    index = start.clamp(0, queue.length - 1);
+    final first = tracks[start.clamp(0, tracks.length - 1)];
+    _base = List.of(tracks);
+    if (_random) {
+      final pool = mode == PlayMode.anarchy ? await _everything() : tracks;
+      queue = _shuffled(pool.isEmpty ? tracks : pool, first);
+      index = 0;
+    } else {
+      queue = List.of(tracks);
+      index = start.clamp(0, queue.length - 1);
+    }
     position = Duration.zero;
     duration = Duration.zero;
     hasTrack.value = true;
@@ -171,6 +217,39 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     }
     _errorStreak = 0;
     await _engine.open([for (final t in queue) t.path], index);
+    await _engine.setRepeatOne(mode == PlayMode.repeat);
+    _publishTrack();
+    _publish();
+  }
+
+  /// Переключает режим. Играющий трек не меняется и продолжается с того же места.
+  Future<void> setMode(PlayMode next) async {
+    if (next == mode) return;
+    final before = mode;
+    mode = next;
+    notifyListeners();
+    if (queue.isEmpty) return;
+    await _engine.setRepeatOne(next == PlayMode.repeat);
+    final cur = current;
+    List<TrackInfo>? rebuilt;
+    if (next == PlayMode.shuffle || next == PlayMode.anarchy) {
+      final pool = next == PlayMode.anarchy ? await _everything() : _base;
+      rebuilt = _shuffled(pool.isEmpty ? queue : pool, cur);
+    } else if (before == PlayMode.shuffle || before == PlayMode.anarchy) {
+      final inBase = cur != null && _base.any((t) => t.id == cur.id);
+      rebuilt = [if (cur != null && !inBase) cur, ..._base];
+    }
+    if (rebuilt == null || cur == null) return;
+    final at = max(0, rebuilt.indexWhere((t) => t.id == cur.id));
+    final wasPlaying = playing;
+    final pos = position;
+    queue = rebuilt;
+    index = at;
+    notifyListeners();
+    await _engine.open([for (final t in queue) t.path], index);
+    await _engine.setRepeatOne(next == PlayMode.repeat);
+    if (pos > Duration.zero) await _engine.seek(pos);
+    if (!wasPlaying) await _engine.pause();
     _publishTrack();
     _publish();
   }
@@ -218,7 +297,7 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   @override
   Future<void> next() {
     if (queue.isEmpty) return Future<void>.value();
-    return _engine.next();
+    return _engine.jumpTo((index + 1) % queue.length);
   }
 
   /// «Назад»: одно нажатие возвращает в начало трека, второе нажатие подряд
@@ -230,7 +309,7 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     final second = now.difference(_lastPrevious) < const Duration(milliseconds: 1500);
     if (second) {
       _lastPrevious = DateTime.fromMillisecondsSinceEpoch(0);
-      await _engine.previous();
+      await _engine.jumpTo((index - 1 + queue.length) % queue.length);
     } else {
       _lastPrevious = now;
       await seek(Duration.zero);

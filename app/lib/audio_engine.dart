@@ -31,6 +31,12 @@ abstract class AudioEngine {
 
   /// Предыдущий трек очереди (без «сначала, если играет дольше 3 секунд»).
   Future<void> previous();
+
+  /// Переходит к треку [index] очереди (с начала).
+  Future<void> jumpTo(int index);
+
+  /// Повторять ли один трек. Иначе очередь идёт по кругу.
+  Future<void> setRepeatOne(bool one);
   Future<void> setVolume(double volume);
 }
 
@@ -126,6 +132,13 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
+  Future<void> jumpTo(int index) => _p.seek(Duration.zero, index: index);
+
+  @override
+  Future<void> setRepeatOne(bool one) =>
+      _p.setLoopMode(one ? ja.LoopMode.one : ja.LoopMode.all);
+
+  @override
   Future<void> setVolume(double volume) => _p.setVolume((volume / 100).clamp(0.0, 1.0));
 }
 
@@ -188,6 +201,13 @@ class MediaKitEngine implements AudioEngine {
 
   @override
   Future<void> previous() => _p.previous();
+
+  @override
+  Future<void> jumpTo(int index) => _p.jump(index);
+
+  @override
+  Future<void> setRepeatOne(bool one) =>
+      _p.setPlaylistMode(one ? mk.PlaylistMode.single : mk.PlaylistMode.loop);
 
   @override
   Future<void> setVolume(double volume) => _p.setVolume(volume);

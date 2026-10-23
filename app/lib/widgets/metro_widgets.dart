@@ -180,12 +180,14 @@ class MetroSlider extends StatelessWidget {
     required this.max,
     required this.onChanged,
     this.onChangeEnd,
+    this.color = Metro.green,
   });
 
   final double value;
   final double max;
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeEnd;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -216,7 +218,7 @@ class MetroSlider extends StatelessWidget {
               alignment: Alignment.centerLeft,
               children: [
                 Container(height: 4, color: Colors.white24),
-                Container(width: w * frac, height: 4, color: Metro.green),
+                Container(width: w * frac, height: 4, color: color),
                 Positioned(
                   left: thumbLeft,
                   child: Container(width: 10, height: 24, color: Colors.white),

@@ -42,6 +42,10 @@ class FakeEngine implements AudioEngine {
   @override
   Future<void> previous() async => calls.add('previous');
   @override
+  Future<void> jumpTo(int index) async => calls.add('jump:$index');
+  @override
+  Future<void> setRepeatOne(bool one) async => calls.add('repeat:$one');
+  @override
   Future<void> setVolume(double volume) async {}
 }
 
@@ -67,7 +71,7 @@ void main() {
     expect(engine.calls, ['seek:0']);
 
     await service.previous();
-    expect(engine.calls, ['seek:0', 'previous']);
+    expect(engine.calls, ['seek:0', 'jump:0']);
 
     // после перехода счёт начинается заново: снова «в начало»
     await service.previous();

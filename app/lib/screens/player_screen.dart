@@ -9,6 +9,7 @@ import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
+import '../widgets/play_mode_bar.dart';
 
 String _fmt(Duration d) {
   final m = d.inMinutes;
@@ -75,8 +76,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }
         final max = ps.duration.inMilliseconds > 0 ? ps.duration.inMilliseconds.toDouble() : 1.0;
         final value = (_drag ?? ps.position.inMilliseconds.toDouble()).clamp(0.0, max).toDouble();
+        final accent = accentFor(ps.mode);
+        final buttonStyle = ElevatedButton.styleFrom(backgroundColor: accent);
         return Scaffold(
+          backgroundColor: backgroundFor(ps.mode),
           appBar: AppBar(
+            backgroundColor: backgroundFor(ps.mode),
             title: const Text('плеер'),
             actions: [
               IconButton(
@@ -105,8 +110,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     child: Text(track.artist ?? track.fileName,
                         style: Theme.of(context).textTheme.bodyMedium),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  const PlayModeBar(height: 44),
+                  const SizedBox(height: 4),
                   MetroSlider(
+                    color: accent,
                     value: value,
                     max: max,
                     onChanged: (v) => setState(() => _drag = v),
@@ -127,7 +135,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: ps.index > 0 ? ps.previous : null,
+                          onPressed: ps.previous,
                           child: const Icon(Icons.skip_previous, size: 32),
                         ),
                       ),
@@ -135,6 +143,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       Expanded(
                         flex: 2,
                         child: ElevatedButton(
+                          style: buttonStyle,
                           onPressed: ps.playOrPause,
                           child: Icon(ps.playing ? Icons.pause : Icons.play_arrow, size: 32),
                         ),
@@ -142,7 +151,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: ps.index < ps.queue.length - 1 ? ps.next : null,
+                          onPressed: ps.next,
                           child: const Icon(Icons.skip_next, size: 32),
                         ),
                       ),

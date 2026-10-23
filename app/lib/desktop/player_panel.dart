@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
+import '../widgets/play_mode_bar.dart';
 import 'cover_image.dart';
 import 'desktop_settings.dart';
 import 'v_slider.dart';
@@ -39,6 +40,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
             child: MetroVSlider(
               value: v,
               onChanged: ps.setVolume,
+              color: accentFor(ps.mode),
               onChangeEnd: (x) => DesktopSettings.instance.setVolume(x),
             ),
           ),
@@ -54,6 +56,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
     required VoidCallback? onPressed,
     bool primary = false,
     String? tooltip,
+    PlayMode mode = PlayMode.standard,
   }) {
     return Expanded(
       flex: primary ? 2 : 1,
@@ -62,7 +65,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
         child: Opacity(
           opacity: onPressed == null ? 0.4 : 1,
           child: Material(
-            color: primary ? Metro.green : Metro.surface,
+            color: primary ? accentFor(mode) : surfaceFor(mode),
             child: InkWell(
               onTap: onPressed,
               child: SizedBox(
@@ -117,10 +120,13 @@ class _PlayerPanelState extends State<PlayerPanel> {
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
+              const PlayModeBar(),
+              const SizedBox(height: 0),
               MetroSlider(
                 value: hasTrack ? value : 0.0,
                 max: max,
+                color: accentFor(ps.mode),
                 onChanged: (v) {
                   if (hasTrack) setState(() => _drag = v);
                 },
@@ -144,20 +150,23 @@ class _PlayerPanelState extends State<PlayerPanel> {
                   _controlButton(
                     icon: Icons.skip_previous,
                     tooltip: 'Назад',
-                    onPressed: hasTrack && ps.index > 0 ? ps.previous : null,
+                    mode: ps.mode,
+                    onPressed: hasTrack ? ps.previous : null,
                   ),
                   const SizedBox(width: 4),
                   _controlButton(
                     icon: ps.playing ? Icons.pause : Icons.play_arrow,
                     tooltip: ps.playing ? 'Пауза' : 'Играть',
                     primary: true,
+                    mode: ps.mode,
                     onPressed: hasTrack ? ps.playOrPause : null,
                   ),
                   const SizedBox(width: 4),
                   _controlButton(
                     icon: Icons.skip_next,
                     tooltip: 'Вперёд',
-                    onPressed: hasTrack && ps.index < ps.queue.length - 1 ? ps.next : null,
+                    mode: ps.mode,
+                    onPressed: hasTrack ? ps.next : null,
                   ),
                 ],
               ),
@@ -165,16 +174,19 @@ class _PlayerPanelState extends State<PlayerPanel> {
           ),
         );
 
-        return Padding(
+        return ColoredBox(
+          color: backgroundFor(ps.mode) ?? Colors.transparent,
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
           child: SizedBox(
-            height: 212,
+            height: 252,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: widget.dockRight
                   ? [content, const SizedBox(width: 8), _volume(ps)]
                   : [_volume(ps), const SizedBox(width: 8), content],
             ),
+          ),
           ),
         );
       },
