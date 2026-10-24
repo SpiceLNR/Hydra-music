@@ -1,5 +1,29 @@
 // Модели данных, приходящих из Rust-ядра (JSON), и временная модель устройства.
 
+/// Массовое удаление вне приложения, ждущее решения пользователя.
+class HeldDeletion {
+  HeldDeletion({
+    required this.playlistId,
+    required this.name,
+    required this.count,
+    required this.folderMissing,
+  });
+
+  final String playlistId;
+  final String name;
+  final int count;
+
+  /// Пропала папка плейлиста целиком (иначе пропали только файлы).
+  final bool folderMissing;
+
+  factory HeldDeletion.fromJson(Map<String, dynamic> j) => HeldDeletion(
+        playlistId: j['playlist_id'] as String,
+        name: j['name'] as String,
+        count: (j['count'] as num).toInt(),
+        folderMissing: j['folder_missing'] as bool,
+      );
+}
+
 class PlaylistInfo {
   PlaylistInfo({
     required this.id,

@@ -23,6 +23,9 @@ class LibraryController extends ChangeNotifier {
   String? notice;
 
   List<PlaylistInfo> playlists = const [];
+
+  /// Массовые удаления вне приложения: ждут решения (удалить везде или вернуть).
+  List<HeldDeletion> held = const [];
   String? rootPath;
   bool scanning = false;
 
@@ -109,6 +112,7 @@ class LibraryController extends ChangeNotifier {
         notice = e.message;
       }
       await reloadPlaylists();
+      await _loadHeld();
       error = null;
       status = LibraryStatus.ready;
     } on CoreException catch (e) {
@@ -118,6 +122,28 @@ class LibraryController extends ChangeNotifier {
       scanning = false;
       notifyListeners();
     }
+  }
+
+  Future<void> _loadHeld() async {
+    try {
+      held = _maps(await Core.call('held_deletions')).map(HeldDeletion.fromJson).toList();
+    } on CoreException {
+      held = const [];
+    }
+  }
+
+  /// Решение по пропавшему плейлисту: [delete] - удалить на всех устройствах,
+  /// иначе оставить и получить файлы с других устройств при синхронизации.
+  Future<void> resolveHeld(String playlistId, {required bool delete}) async {
+    try {
+      await Core.call('resolve_held', {'playlist_id': playlistId, 'delete': delete});
+    } on CoreException catch (e) {
+      notice = e.message;
+    }
+    await reloadPlaylists();
+    await _loadHeld();
+    tracksRevision++;
+    notifyListeners();
   }
 
   List<Map<String, dynamic>> _maps(dynamic v) => (v as List).cast<Map<String, dynamic>>();

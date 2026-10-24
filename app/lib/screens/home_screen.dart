@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../library_controller.dart';
 import '../theme.dart';
+import '../widgets/held_banner.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
 import 'devices_screen.dart';
@@ -63,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
                 const SectionTitle('главная'),
                 _StatusBanner(lib: hydraLibrary),
+                const HeldBanner(),
                 Padding(
                   padding: const EdgeInsets.all(8),
                   child: GridView.count(

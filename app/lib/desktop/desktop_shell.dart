@@ -11,6 +11,7 @@ import '../player_service.dart';
 import '../screens/devices_screen.dart';
 import '../screens/settings_screen.dart';
 import '../theme.dart';
+import '../widgets/held_banner.dart';
 import '../widgets/metro_widgets.dart';
 import 'collapsed_strip.dart';
 import 'context_menu.dart';
@@ -920,6 +921,7 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
                     _header(),
                     PlayerPanel(dockRight: dockRight),
                     if (hydraLibrary.scanning) const MetroProgress(),
+                    const HeldBanner(),
                     _playlistBar(),
                     Expanded(child: body),
                     _status(),

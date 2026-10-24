@@ -133,6 +133,14 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
     match method {
         "scan" => to_json(st.lib.scan(now_ms())),
         "playlists" => to_json(st.lib.playlists()),
+        "held_deletions" => to_json(Ok::<_, hydra_core::Error>(st.lib.held_deletions().to_vec())),
+        "resolve_held" => {
+            let delete = args.get("delete").and_then(Value::as_bool).unwrap_or(false);
+            st.lib
+                .resolve_held(&arg_str(args, "playlist_id")?, delete, now_ms())
+                .map_err(es)?;
+            Ok(json!({}))
+        }
         "tracks" => to_json(st.lib.tracks(&arg_str(args, "playlist_id")?)),
         "trash_items" => to_json(st.lib.trash_items()),
         "create_playlist" => to_json(st.lib.create_playlist(&arg_str(args, "name")?, now_ms())),

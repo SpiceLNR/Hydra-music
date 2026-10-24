@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -71,6 +71,22 @@ pub struct ScanReport {
     pub playlists_created: usize,
 }
 
+/// Сколько пропавших файлов в плейлисте считается «массовым» удалением.
+const MASS_MIN: usize = 5;
+
+/// Массовое удаление вне приложения, ожидающее решения пользователя.
+/// Пока решения нет, в журнал ничего не пишется и на другие устройства не уходит.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HeldDeletion {
+    pub playlist_id: String,
+    pub name: String,
+    pub count: usize,
+    /// Пропала папка плейлиста целиком.
+    pub folder_missing: bool,
+    #[serde(skip)]
+    track_ids: Vec<String>,
+}
+
 struct PlaylistRow {
     id: String,
     dir_name: String,
@@ -84,6 +100,7 @@ pub struct Library {
     device_id: String,
     conn: Connection,
     clock: Clock,
+    held: Vec<HeldDeletion>,
 }
 
 impl Library {
@@ -109,6 +126,7 @@ impl Library {
             device_id: device_id.to_string(),
             conn,
             clock,
+            held: Vec::new(),
         })
     }
 
@@ -713,6 +731,10 @@ impl Library {
             .iter()
             .filter(|t| !pending.contains(&t.track_id))
             .count();
+        let mut totals: BTreeMap<String, usize> = BTreeMap::new();
+        for t in live.iter().filter(|t| !pending.contains(&t.track_id)) {
+            *totals.entry(t.playlist_id.clone()).or_default() += 1;
+        }
         let known: HashSet<(String, String)> = live
             .iter()
             .map(|t| (t.playlist_id.clone(), naming::fold_key(&t.file_name)))
@@ -782,16 +804,47 @@ impl Library {
             }
         }
 
-        // 4. Файлы, которые пропали и не нашлись в другом месте: удалены вне приложения
+        // 4. Файлы, которые пропали и не нашлись в другом месте: удалены вне приложения.
+        // Если пропала большая часть плейлиста или вся его папка, удаление не записывается:
+        // пользователь сам решает (`resolve_held`), удалять ли это на всех устройствах.
+        let on_disk: HashSet<&String> = dirs.iter().map(|(id, _)| id).collect();
+        let mut by_playlist: BTreeMap<String, Vec<TrackState>> = BTreeMap::new();
         for m in missing {
-            self.record(now_ms, Kind::Delete, &m.track_id, json!({"external": true}))?;
-            report.removed += 1;
+            by_playlist
+                .entry(m.playlist_id.clone())
+                .or_default()
+                .push(m);
         }
+        let all = self.all_playlists()?;
+        let mut held: Vec<HeldDeletion> = Vec::new();
+        for (pid, group) in by_playlist {
+            let total = totals.get(&pid).copied().unwrap_or(0);
+            if group.len() >= MASS_MIN && group.len() * 2 >= total {
+                let name = all
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .map(|p| p.dir_name.clone())
+                    .unwrap_or_default();
+                held.push(HeldDeletion {
+                    folder_missing: !on_disk.contains(&pid),
+                    playlist_id: pid,
+                    name,
+                    count: group.len(),
+                    track_ids: group.into_iter().map(|m| m.track_id).collect(),
+                });
+                continue;
+            }
+            for m in group {
+                self.record(now_ms, Kind::Delete, &m.track_id, json!({"external": true}))?;
+                report.removed += 1;
+            }
+        }
+        let held_ids: HashSet<String> = held.iter().map(|h| h.playlist_id.clone()).collect();
+        self.held = held;
 
         // 5. Плейлисты, чьих папок больше нет
-        let on_disk: HashSet<&String> = dirs.iter().map(|(id, _)| id).collect();
-        for p in self.all_playlists()? {
-            if !p.deleted && !on_disk.contains(&p.id) {
+        for p in all {
+            if !p.deleted && !on_disk.contains(&p.id) && !held_ids.contains(&p.id) {
                 self.conn.execute(
                     "UPDATE playlists SET deleted = 1 WHERE playlist_id = ?1",
                     [&p.id],
@@ -812,6 +865,44 @@ impl Library {
         }
         self.write_playlist_order()?;
         Ok(report)
+    }
+
+    /// Массовые удаления, ждущие решения (после последнего `scan`).
+    pub fn held_deletions(&self) -> &[HeldDeletion] {
+        &self.held
+    }
+
+    /// Решение по массовому удалению. `delete = true`: удалить на всех устройствах
+    /// (треки уходят в корзину). `delete = false`: оставить; файлы будут получены
+    /// от других устройств при ближайшей синхронизации.
+    pub fn resolve_held(&mut self, playlist_id: &str, delete: bool, now_ms: u64) -> Result<()> {
+        let pos = self
+            .held
+            .iter()
+            .position(|h| h.playlist_id == playlist_id)
+            .ok_or_else(|| Error::Invalid("нет такого ожидающего удаления".into()))?;
+        let h = self.held.remove(pos);
+        if delete {
+            for id in &h.track_ids {
+                self.record(now_ms, Kind::Delete, id, json!({"external": true}))?;
+            }
+            if h.folder_missing {
+                self.conn.execute(
+                    "UPDATE playlists SET deleted = 1 WHERE playlist_id = ?1",
+                    [&h.playlist_id],
+                )?;
+                self.record_pl(now_ms, &h.playlist_id, json!({ "deleted": true }))?;
+            }
+        } else {
+            if h.folder_missing {
+                fs::create_dir_all(self.playlist_dir(&h.playlist_id)?)?;
+            }
+            for id in &h.track_ids {
+                self.conn
+                    .execute("UPDATE tracks SET pending = 1 WHERE track_id = ?1", [id])?;
+            }
+        }
+        Ok(())
     }
 
     // ---------- внутреннее ----------
@@ -2072,5 +2163,47 @@ mod tests {
         fs::write(&bad, "nope").unwrap();
         assert!(lib.set_cover(&id, &bad, T0 + 5).is_err());
         assert!(lib.cover(&id).unwrap().is_some());
+    }
+
+    #[test]
+    fn mass_deletion_outside_the_app_waits_for_a_decision() {
+        let (_t, mut lib) = setup();
+        for i in 0..6 {
+            put(&lib, "Rock", &format!("t{i}.mp3"), &format!("data{i}"));
+        }
+        lib.scan(T0 + 1).unwrap();
+        let pid = playlist_id(&lib, "Rock");
+        fs::remove_dir_all(lib.root().join("Rock")).unwrap();
+
+        let r = lib.scan(T0 + 2).unwrap();
+        assert_eq!(r.removed, 0);
+        assert_eq!(lib.held_deletions().len(), 1);
+        assert_eq!(lib.held_deletions()[0].count, 6);
+        assert!(lib.held_deletions()[0].folder_missing);
+        assert_eq!(lib.trash_items().unwrap().len(), 0);
+        assert_eq!(lib.playlists().unwrap().len(), 1);
+
+        // «оставить»: папка возвращается, файлы ждут других устройств
+        lib.resolve_held(&pid, false, T0 + 3).unwrap();
+        assert!(lib.root().join("Rock").is_dir());
+        assert!(lib.tracks(&pid).unwrap().iter().all(|t| t.pending));
+        assert_eq!(lib.scan(T0 + 4).unwrap().removed, 0);
+        assert!(lib.held_deletions().is_empty());
+    }
+
+    #[test]
+    fn mass_deletion_can_be_confirmed() {
+        let (_t, mut lib) = setup();
+        for i in 0..6 {
+            put(&lib, "Rock", &format!("t{i}.mp3"), &format!("data{i}"));
+        }
+        lib.scan(T0 + 1).unwrap();
+        let pid = playlist_id(&lib, "Rock");
+        fs::remove_dir_all(lib.root().join("Rock")).unwrap();
+        lib.scan(T0 + 2).unwrap();
+        lib.resolve_held(&pid, true, T0 + 3).unwrap();
+        assert_eq!(lib.trash_items().unwrap().len(), 6);
+        assert!(lib.playlists().unwrap().is_empty());
+        assert!(lib.resolve_held(&pid, true, T0 + 4).is_err());
     }
 }
