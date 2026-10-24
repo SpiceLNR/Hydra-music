@@ -2171,6 +2171,7 @@ mod tests {
         for i in 0..6 {
             put(&lib, "Rock", &format!("t{i}.mp3"), &format!("data{i}"));
         }
+        put(&lib, "Jazz", "j.mp3", "jazz"); // в библиотеке остаётся другая музыка
         lib.scan(T0 + 1).unwrap();
         let pid = playlist_id(&lib, "Rock");
         fs::remove_dir_all(lib.root().join("Rock")).unwrap();
@@ -2181,7 +2182,7 @@ mod tests {
         assert_eq!(lib.held_deletions()[0].count, 6);
         assert!(lib.held_deletions()[0].folder_missing);
         assert_eq!(lib.trash_items().unwrap().len(), 0);
-        assert_eq!(lib.playlists().unwrap().len(), 1);
+        assert_eq!(lib.playlists().unwrap().len(), 2);
 
         // «оставить»: папка возвращается, файлы ждут других устройств
         lib.resolve_held(&pid, false, T0 + 3).unwrap();
@@ -2197,13 +2198,14 @@ mod tests {
         for i in 0..6 {
             put(&lib, "Rock", &format!("t{i}.mp3"), &format!("data{i}"));
         }
+        put(&lib, "Jazz", "j.mp3", "jazz"); // в библиотеке остаётся другая музыка
         lib.scan(T0 + 1).unwrap();
         let pid = playlist_id(&lib, "Rock");
         fs::remove_dir_all(lib.root().join("Rock")).unwrap();
         lib.scan(T0 + 2).unwrap();
         lib.resolve_held(&pid, true, T0 + 3).unwrap();
         assert_eq!(lib.trash_items().unwrap().len(), 6);
-        assert!(lib.playlists().unwrap().is_empty());
+        assert_eq!(lib.playlists().unwrap().len(), 1);
         assert!(lib.resolve_held(&pid, true, T0 + 4).is_err());
     }
 }
