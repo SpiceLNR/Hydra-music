@@ -65,7 +65,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
         child: Opacity(
           opacity: onPressed == null ? 0.4 : 1,
           child: Material(
-            color: primary ? accentFor(mode) : surfaceFor(mode),
+            color: primary ? accentFor(mode) : Metro.surface,
             child: InkWell(
               onTap: onPressed,
               child: SizedBox(
@@ -174,9 +174,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
           ),
         );
 
-        return ColoredBox(
-          color: backgroundFor(ps.mode) ?? Colors.transparent,
-          child: Padding(
+        return Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
           child: SizedBox(
             height: 252,
@@ -186,7 +184,6 @@ class _PlayerPanelState extends State<PlayerPanel> {
                   ? [content, const SizedBox(width: 8), _volume(ps)]
                   : [_volume(ps), const SizedBox(width: 8), content],
             ),
-          ),
           ),
         );
       },

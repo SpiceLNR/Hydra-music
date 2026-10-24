@@ -79,9 +79,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         final accent = accentFor(ps.mode);
         final buttonStyle = ElevatedButton.styleFrom(backgroundColor: accent);
         return Scaffold(
-          backgroundColor: backgroundFor(ps.mode),
           appBar: AppBar(
-            backgroundColor: backgroundFor(ps.mode),
             title: const Text('плеер'),
             actions: [
               IconButton(

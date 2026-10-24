@@ -9,10 +9,8 @@ class Metro {
   static const textDim = Color(0xFFAAAAAA);
   static const danger = Color(0xFFE51400);
 
-  // режим «Анархия»: окно плеера становится кроваво-красным
-  static const blood = Color(0xFFD50000);
-  static const bloodBg = Color(0xFF7A0000);
-  static const bloodDark = Color(0xFF3D0000);
+  // режим «Анархия»: зелёные элементы плеера становятся красными
+  static const blood = Color(0xFFE51400);
 
   /// Подсветка нажатия вместо круглой «волны».
   static const press = Color(0x33FFFFFF);
