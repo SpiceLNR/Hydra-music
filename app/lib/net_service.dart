@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'app_messenger.dart';
 import 'core_bridge.dart';
@@ -76,6 +77,7 @@ class NetService extends ChangeNotifier {
   /// Служба переднего плана (Android): не даёт телефону усыпить сеть при погасшем экране.
   static const MethodChannel _service = MethodChannel('hydra/sync_service');
   bool _serviceOn = false;
+  bool _askedNotifications = false;
   DateTime _serviceStarted = DateTime.fromMillisecondsSinceEpoch(0);
 
   int? _generation;
@@ -96,7 +98,18 @@ class NetService extends ChangeNotifier {
       return; // задача только запущена: не успела отметиться занятой
     }
     _serviceOn = on;
-    if (on) _serviceStarted = DateTime.now();
+    if (on) {
+      _serviceStarted = DateTime.now();
+      if (!_askedNotifications) {
+        // без разрешения Android 13+ не показывает уведомление службы (сама она работает)
+        _askedNotifications = true;
+        try {
+          await Permission.notification.request();
+        } on Object {
+          // не спросили: синхронизация идёт и без уведомления
+        }
+      }
+    }
     try {
       final ok = await _service.invokeMethod<bool>(on ? 'start' : 'stop', {'text': text});
       if (on && ok == false) _serviceOn = false; // Android не разрешил (например, из фона)
