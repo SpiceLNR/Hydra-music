@@ -526,6 +526,11 @@ impl Library {
                 None => self.set_pending(id, true)?,
             }
         }
+        // Удаление плейлиста пришло раньше удаления его треков: теперь плейлист пуст,
+        // и его папку можно убрать.
+        for pid in &touched {
+            self.apply_playlist_state(pid, now_ms)?;
+        }
         // плейлисты с правилом порядка: чужие новые треки встают на своё место
         let mut to_sort = manifests.clone();
         for t in &touched {

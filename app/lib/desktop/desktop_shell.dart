@@ -71,6 +71,8 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     WidgetsBinding.instance.addObserver(this);
     hydraLibrary.addListener(_onLibrary);
     _syncSelection();
+    // окно развернули: подхватываем файлы, добавленные или удалённые в проводнике
+    unawaited(hydraLibrary.onResume());
   }
 
   @override

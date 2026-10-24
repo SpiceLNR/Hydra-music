@@ -279,6 +279,8 @@ class NetService extends ChangeNotifier {
   }
 
   Future<void> sync(DeviceInfo d) async {
+    // сначала подхватываем изменения в папке (файлы, удалённые в проводнике)
+    await hydraLibrary.refresh();
     await _keepAwake(true, 'Синхронизация с «${d.name}»');
     try {
       await Core.call('net_sync', {'device_id': d.id});

@@ -512,11 +512,9 @@ impl Library {
             .filter(|t| t.deleted)
             .ok_or_else(|| Error::Invalid(format!("track {track_id} is not in trash")))?;
         let saved = self.trash_dir(track_id).join(&t.file_name);
-        if !saved.exists() {
-            return Err(Error::Invalid(
-                "файла уже нет в корзине (удалён вне приложения)".into(),
-            ));
-        }
+        // Файла нет (его удалили вне приложения): трек всё равно возвращается, а сам файл
+        // будет получен с другого устройства при ближайшей синхронизации.
+        let have_file = saved.exists();
         let pdir = self.playlist_dir(&t.playlist_id)?;
         let was_deleted: i64 = self.conn.query_row(
             "SELECT deleted FROM playlists WHERE playlist_id = ?1",
@@ -532,7 +530,9 @@ impl Library {
         }
         fs::create_dir_all(&pdir)?;
         let new_name = naming::unique_file_name(&t.file_name, &list_names(&pdir));
-        fs::rename(&saved, pdir.join(&new_name))?;
+        if have_file {
+            fs::rename(&saved, pdir.join(&new_name))?;
+        }
         let _ = fs::remove_dir_all(self.trash_dir(track_id));
         self.record(
             now_ms,
@@ -540,6 +540,12 @@ impl Library {
             track_id,
             json!({"to_playlist_id": t.playlist_id, "file_name": new_name}),
         )?;
+        if !have_file {
+            self.conn.execute(
+                "UPDATE tracks SET pending = 1 WHERE track_id = ?1",
+                [track_id],
+            )?;
+        }
         self.resort_playlist(&t.playlist_id, now_ms)?;
         self.write_manifest(&t.playlist_id)?;
         Ok(())
@@ -2207,5 +2213,24 @@ mod tests {
         assert_eq!(lib.trash_items().unwrap().len(), 6);
         assert_eq!(lib.playlists().unwrap().len(), 1);
         assert!(lib.resolve_held(&pid, true, T0 + 4).is_err());
+    }
+
+    #[test]
+    fn track_deleted_outside_the_app_can_be_restored_and_waits_for_its_file() {
+        let (_t, mut lib) = setup();
+        let f = put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Rock", "b.mp3", "bbb");
+        lib.scan(T0 + 1).unwrap();
+        fs::remove_file(f).unwrap();
+        assert_eq!(lib.scan(T0 + 2).unwrap().removed, 1);
+        let id = lib.trash_items().unwrap()[0].track_id.clone();
+
+        lib.restore_track(&id, T0 + 3).unwrap();
+        let pid = playlist_id(&lib, "Rock");
+        let tracks = lib.tracks(&pid).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert!(tracks.iter().any(|t| t.pending));
+        // пока файл не получен, скан его снова не удаляет
+        assert_eq!(lib.scan(T0 + 4).unwrap().removed, 0);
     }
 }
