@@ -42,6 +42,7 @@ PERMISSIONS = [
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
     "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.WAKE_LOCK",
     "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
@@ -79,8 +80,11 @@ LINK_XML = """            <meta-data android:name="flutter_deeplinking_enabled" 
 
 
 SYNC_SERVICE_XML = """        <service android:name=".SyncService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false"/>
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Автосинхронизация музыки между своими устройствами по локальной сети"/>
+        </service>
 """
 
 SYNC_SERVICE_KT = """package __PKG__
@@ -113,7 +117,9 @@ class SyncService : Service() {
                 NotificationChannel(channelId, "Синхронизация", NotificationManager.IMPORTANCE_LOW)
             )
         }
-        val text = intent?.getStringExtra("text") ?: "Синхронизация"
+        val busy = intent?.getBooleanExtra("busy", true) ?: true
+        val text = intent?.getStringExtra("text")
+            ?: (if (busy) "Синхронизация" else "Автосинхронизация включена")
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, channelId)
         } else {
@@ -122,14 +128,28 @@ class SyncService : Service() {
         }
         val notification = builder
             .setContentTitle("Hydra Music")
-            .setContentText(if (text.isEmpty()) "Синхронизация" else text)
+            .setContentText(
+                if (text.isEmpty()) (if (busy) "Синхронизация" else "Автосинхронизация включена")
+                else text
+            )
             .setSmallIcon(applicationInfo.icon)
             .setOngoing(true)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            // dataSync на Android 15 ограничен по времени, поэтому дежурная служба идёт как specialUse
+            startForeground(4711, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(4711, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
             startForeground(4711, notification)
+        }
+        if (!busy) {
+            // дежурство: процесс жив, но процессор и Wi-Fi ничем не удерживаются
+            wake?.let { if (it.isHeld) it.release() }
+            wifi?.let { if (it.isHeld) it.release() }
+            wake = null
+            wifi = null
+            return START_NOT_STICKY
         }
         if (wake == null) {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -161,8 +181,13 @@ class SyncService : Service() {
 
 MAIN_ACTIVITY_KT = """package __PKG__
 
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -202,6 +227,7 @@ class MainActivity : AudioServiceActivity() {
                         try {
                             val intent = Intent(this, SyncService::class.java)
                             intent.putExtra("text", call.argument<String>("text") ?: "")
+                            intent.putExtra("busy", call.argument<Boolean>("busy") ?: true)
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)
                             } else {
@@ -216,6 +242,29 @@ class MainActivity : AudioServiceActivity() {
                     "stop" -> {
                         stopService(Intent(this, SyncService::class.java))
                         result.success(true)
+                    }
+                    "charging" -> {
+                        val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                        result.success(bm.isCharging)
+                    }
+                    "batteryExemptionState" -> {
+                        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                        result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                    }
+                    "requestBatteryExemption" -> {
+                        try {
+                            val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                            i.data = Uri.parse("package:" + packageName)
+                            startActivity(i)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            try {
+                                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                result.success(true)
+                            } catch (e2: Exception) {
+                                result.success(false)
+                            }
+                        }
                     }
                     else -> result.notImplemented()
                 }
@@ -291,7 +340,7 @@ def patch_activity() -> int:
             print("В MainActivity.kt нет строки package.")
             return 1
         pkg = m.group(1)
-        if "initialLink" not in t:
+        if "requestBatteryExemption" not in t:
             f.write_text(MAIN_ACTIVITY_KT.replace("__PKG__", pkg), encoding="utf-8")
             print("MainActivity: AudioServiceActivity + канал службы синхронизации")
         else:

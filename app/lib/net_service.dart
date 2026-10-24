@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_messenger.dart';
 import 'core_bridge.dart';
@@ -91,6 +92,31 @@ class NetService extends ChangeNotifier {
     return host.isEmpty ? 'Компьютер' : host;
   }
 
+  /// Запускает или переключает службу переднего плана (Android).
+  /// [busy]: идёт обмен, держим сеть и процессор. Иначе служба только «дежурит»:
+  /// процесс жив и принимает подключения других устройств, но ничего не удерживает.
+  Future<bool> _startService({required bool busy, String text = ''}) async {
+    try {
+      final ok = await _service.invokeMethod<bool>('start', {'text': text, 'busy': busy});
+      return ok != false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<void> _askNotifications() async {
+    if (_askedNotifications) return;
+    // без разрешения Android 13+ не показывает уведомление службы (сама она работает)
+    _askedNotifications = true;
+    try {
+      await Permission.notification.request();
+    } on Object {
+      // не спросили: служба работает и без уведомления
+    }
+  }
+
   Future<void> _keepAwake(bool on, [String text = '']) async {
     if (!Platform.isAndroid) return;
     if (on == _serviceOn) return;
@@ -100,23 +126,145 @@ class NetService extends ChangeNotifier {
     _serviceOn = on;
     if (on) {
       _serviceStarted = DateTime.now();
-      if (!_askedNotifications) {
-        // без разрешения Android 13+ не показывает уведомление службы (сама она работает)
-        _askedNotifications = true;
+      await _askNotifications();
+      if (!await _startService(busy: true, text: text)) {
+        _serviceOn = false; // Android не разрешил (например, из фона)
+      }
+    } else if (autoSync) {
+      // обмен закончился, но автосинхронизация включена: остаёмся на дежурстве
+      await _startService(busy: false);
+    } else {
+      try {
+        await _service.invokeMethod<bool>('stop');
+      } on PlatformException {
+        // служба уже остановлена
+      } on MissingPluginException {
+        // нет нативной части
+      }
+    }
+  }
+
+  // ---------- автосинхронизация ----------
+
+  /// Включена ли автосинхронизация (по умолчанию да). Работает, пока приложение запущено;
+  /// на Android для этого держится служба с постоянным уведомлением.
+  bool autoSync = true;
+
+  /// Автосинхронизировать только пока телефон заряжается (Android).
+  bool autoOnlyCharging = false;
+
+  Timer? _autoTimer;
+  final Map<String, DateTime> _lastAuto = {};
+  final Set<String> _online = {};
+
+  static const Duration _autoEvery = Duration(minutes: 3);
+  static const Duration _autoGap = Duration(minutes: 10);
+
+  Future<void> _loadPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      autoSync = p.getBool('auto_sync') ?? true;
+      autoOnlyCharging = p.getBool('auto_only_charging') ?? false;
+    } on Object {
+      // настройки не прочитались: остаются значения по умолчанию
+    }
+  }
+
+  Future<void> setAutoSync(bool value) async {
+    autoSync = value;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('auto_sync', value);
+    } on Object {
+      // не сохранилось: заработает до перезапуска
+    }
+    await _applyAuto();
+  }
+
+  Future<void> setAutoOnlyCharging(bool value) async {
+    autoOnlyCharging = value;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('auto_only_charging', value);
+    } on Object {
+      // не сохранилось: заработает до перезапуска
+    }
+  }
+
+  /// Приводит таймер и службу в соответствие с настройкой.
+  Future<void> _applyAuto() async {
+    _autoTimer?.cancel();
+    _autoTimer = null;
+    if (autoSync && started) {
+      _autoTimer = Timer.periodic(_autoEvery, (_) => unawaited(_autoTick()));
+    }
+    if (Platform.isAndroid && !_serviceOn) {
+      if (autoSync) {
+        await _askNotifications();
+        await _startService(busy: false);
+      } else {
         try {
-          await Permission.notification.request();
-        } on Object {
-          // не спросили: синхронизация идёт и без уведомления
+          await _service.invokeMethod<bool>('stop');
+        } on PlatformException {
+          // уже остановлена
+        } on MissingPluginException {
+          // нет нативной части
         }
       }
     }
+  }
+
+  Future<bool> _chargingOk() async {
+    if (!autoOnlyCharging || !Platform.isAndroid) return true;
     try {
-      final ok = await _service.invokeMethod<bool>(on ? 'start' : 'stop', {'text': text});
-      if (on && ok == false) _serviceOn = false; // Android не разрешил (например, из фона)
-    } on PlatformException {
-      _serviceOn = false;
-    } on MissingPluginException {
-      _serviceOn = false;
+      return await _service.invokeMethod<bool>('charging') ?? true;
+    } on Object {
+      return true;
+    }
+  }
+
+  /// Раз в несколько минут синхронизируемся с устройством, которое сейчас в сети.
+  Future<void> _autoTick() async {
+    if (!autoSync || !started || busy) return;
+    if (!await _chargingOk()) return;
+    final now = DateTime.now();
+    for (final d in devices) {
+      if (!d.online) continue;
+      final last = _lastAuto[d.id];
+      if (last != null && now.difference(last) < _autoGap) continue;
+      _lastAuto[d.id] = now;
+      await sync(d, quiet: true);
+      return; // по одному устройству за раз
+    }
+  }
+
+  /// Устройство только что появилось в сети: синхронизируемся с ним сразу.
+  Future<void> _autoSyncSoon(DeviceInfo d) async {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (!autoSync || busy || !await _chargingOk()) return;
+    _lastAuto[d.id] = DateTime.now();
+    await sync(d, quiet: true);
+  }
+
+  /// Освобождена ли программа от экономии батареи (Android).
+  Future<bool> batteryExempt() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _service.invokeMethod<bool>('batteryExemptionState') ?? false;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Открывает системный запрос «не ограничивать работу в фоне» (Android).
+  Future<void> requestBatteryExempt() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _service.invokeMethod<bool>('requestBatteryExemption');
+    } on Object {
+      // экран настроек не открылся
     }
   }
 
@@ -149,6 +297,7 @@ class NetService extends ChangeNotifier {
   Future<void> start() async {
     if (started) return;
     unawaited(_listenLinks());
+    await _loadPrefs();
     deviceName = _defaultName();
     try {
       await Core.call('net_start', {'name': deviceName});
@@ -161,6 +310,7 @@ class NetService extends ChangeNotifier {
     }
     await _poll();
     _schedule();
+    await _applyAuto();
   }
 
   /// Экран, которому нужны частые обновления, вызывает watch/unwatch.
@@ -198,6 +348,13 @@ class NetService extends ChangeNotifier {
       log = (st['log'] as List).cast<String>();
       familyGeneration = (st['family_generation'] as num).toInt();
       devices = list.cast<Map<String, dynamic>>().map(DeviceInfo.fromJson).toList();
+      for (final d in devices) {
+        if (!d.online) {
+          _online.remove(d.id);
+        } else if (_online.add(d.id) && autoSync && !busy) {
+          unawaited(_autoSyncSoon(d));
+        }
+      }
       final changed = _generation != null && _generation != gen;
       _generation = gen;
       notifyListeners();
@@ -278,7 +435,7 @@ class NetService extends ChangeNotifier {
     unawaited(_poll());
   }
 
-  Future<void> sync(DeviceInfo d) async {
+  Future<void> sync(DeviceInfo d, {bool quiet = false}) async {
     // сначала подхватываем изменения в папке (файлы, удалённые в проводнике)
     await hydraLibrary.refresh();
     await _keepAwake(true, 'Синхронизация с «${d.name}»');
@@ -286,7 +443,7 @@ class NetService extends ChangeNotifier {
       await Core.call('net_sync', {'device_id': d.id});
       error = '';
     } on CoreException catch (e) {
-      error = e.message;
+      if (!quiet) error = e.message;
       _serviceStarted = DateTime.fromMillisecondsSinceEpoch(0);
       await _keepAwake(false);
     }

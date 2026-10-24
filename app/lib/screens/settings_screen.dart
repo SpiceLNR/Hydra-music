@@ -7,6 +7,7 @@ import '../core_bridge.dart';
 import '../desktop/desktop_settings.dart';
 import '../desktop/dock_controller.dart';
 import '../library_controller.dart';
+import '../net_service.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
 
@@ -18,15 +19,34 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
-  bool wifiOnly = true;
-  bool chargingOnly = false;
+class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObserver {
   final relay = TextEditingController(text: 'по умолчанию (общедоступный)');
+  bool? _batteryFree; // null: ещё не узнали
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _readBattery();
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     relay.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // вернулись из системного окна про батарею
+    if (state == AppLifecycleState.resumed) _readBattery();
+  }
+
+  Future<void> _readBattery() async {
+    if (!Platform.isAndroid) return;
+    final v = await hydraNet.batteryExempt();
+    if (mounted) setState(() => _batteryFree = v);
   }
 
   @override
@@ -83,15 +103,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const Divider(),
           ],
-          MetroSwitchRow(
-            title: 'Синхронизировать только по Wi-Fi',
-            value: wifiOnly,
-            onChanged: (v) => setState(() => wifiOnly = v),
-          ),
-          MetroSwitchRow(
-            title: 'Только во время зарядки',
-            value: chargingOnly,
-            onChanged: (v) => setState(() => chargingOnly = v),
+          ListenableBuilder(
+            listenable: hydraNet,
+            builder: (context, _) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                MetroSwitchRow(
+                  title: 'Автосинхронизация',
+                  value: hydraNet.autoSync,
+                  onChanged: hydraNet.setAutoSync,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    Platform.isAndroid
+                        ? 'Устройства из вашей семьи сами синхронизируются, когда оказываются в одной '
+                            'сети Wi-Fi. Пока включено, в шторке висит уведомление: так Android не '
+                            'закрывает приложение.'
+                        : 'Устройства из вашей семьи сами синхронизируются, когда оказываются в одной '
+                            'сети Wi-Fi, пока Hydra Music запущена.',
+                    style: const TextStyle(fontSize: 13, color: Metro.textDim),
+                  ),
+                ),
+                if (Platform.isAndroid) ...[
+                  MetroSwitchRow(
+                    title: 'Только во время зарядки',
+                    value: hydraNet.autoOnlyCharging,
+                    onChanged: hydraNet.autoSync ? hydraNet.setAutoOnlyCharging : (_) {},
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: OutlinedButton(
+                      onPressed: _batteryFree == true ? null : hydraNet.requestBatteryExempt,
+                      child: Text(_batteryFree == true
+                          ? 'Работа в фоне разрешена'
+                          : 'Разрешить работу в фоне (батарея)'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
           const Divider(),
           Padding(
