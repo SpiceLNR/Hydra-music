@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../build_info.dart';
 import '../library_controller.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
@@ -52,12 +51,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: ListenableBuilder(
           listenable: hydraLibrary,
           builder: (context, _) {
+            // без доступа к папке или пока библиотека не открыта эти разделы недоступны
+            final ready = hydraLibrary.status == LibraryStatus.ready;
             return ListView(
               padding: const EdgeInsets.only(bottom: 16),
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 24, 16, 4),
-                  child: Text('HYDRA MUSIC · сборка $kBuild',
+                  child: const Text('HYDRA MUSIC',
                       style: const TextStyle(fontSize: 14, letterSpacing: 2, color: Metro.green)),
                 ),
                 const SectionTitle('главная'),
@@ -75,21 +76,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         label: 'Плейлисты',
                         subtitle: _playlistsSubtitle(hydraLibrary),
                         icon: Icons.queue_music,
-                        onTap: () => _open(const PlaylistsScreen()),
+                        onTap: ready ? () => _open(const PlaylistsScreen()) : null,
                       ),
                       MetroTile(
                         label: 'Устройства',
                         subtitle: 'синхронизация',
                         icon: Icons.devices,
                         color: Metro.greenDark,
-                        onTap: () => _open(const DevicesScreen()),
+                        onTap: ready ? () => _open(const DevicesScreen()) : null,
                       ),
                       MetroTile(
                         label: 'Корзина',
                         subtitle: 'хранится 30 дней',
                         icon: Icons.delete_outline,
                         color: Metro.surface,
-                        onTap: () => _open(const TrashScreen()),
+                        onTap: ready ? () => _open(const TrashScreen()) : null,
                       ),
                       MetroTile(
                         label: 'Настройки',

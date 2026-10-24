@@ -172,6 +172,17 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
 
   bool get _random => mode == PlayMode.shuffle || mode == PlayMode.anarchy;
 
+  /// Порядок плейлиста берётся у текущего трека: после «Анархии» играет его плейлист.
+  Future<void> _useOwnPlaylist(TrackInfo? cur) async {
+    if (cur == null) return;
+    try {
+      final own = await hydraLibrary.tracks(cur.playlistId);
+      if (own.isNotEmpty) _base = own;
+    } on Object {
+      // плейлист не прочитался: остаёмся с прежним порядком
+    }
+  }
+
   /// Все треки всех плейлистов (для «Анархии»).
   Future<List<TrackInfo>> _everything() async {
     final all = <TrackInfo>[];
@@ -233,9 +244,12 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     final cur = current;
     List<TrackInfo>? rebuilt;
     if (next == PlayMode.shuffle || next == PlayMode.anarchy) {
+      if (next == PlayMode.shuffle) await _useOwnPlaylist(cur);
       final pool = next == PlayMode.anarchy ? await _everything() : _base;
       rebuilt = _shuffled(pool.isEmpty ? queue : pool, cur);
     } else if (before == PlayMode.shuffle || before == PlayMode.anarchy) {
+      // дальше играет плейлист, которому принадлежит текущий трек, а не тот, где музыку запустили
+      await _useOwnPlaylist(cur);
       final inBase = cur != null && _base.any((t) => t.id == cur.id);
       rebuilt = [if (cur != null && !inBase) cur, ..._base];
     }

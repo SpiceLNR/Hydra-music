@@ -15,12 +15,15 @@ class MetroTile extends StatelessWidget {
   final String label;
   final String? subtitle;
   final IconData icon;
-  final VoidCallback onTap;
+  /// null - плитка недоступна: тусклая и не нажимается.
+  final VoidCallback? onTap;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
+    return Opacity(
+      opacity: onTap == null ? 0.4 : 1,
+      child: Material(
       color: color,
       child: InkWell(
         onTap: onTap,
@@ -45,6 +48,7 @@ class MetroTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

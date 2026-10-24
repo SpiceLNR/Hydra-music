@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 
+import '../build_info.dart';
 import '../core_bridge.dart';
 import '../desktop/desktop_settings.dart';
 import '../desktop/dock_controller.dart';
@@ -125,6 +126,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
               return ListTile(title: const Text('Ядро синхронизации'), subtitle: Text(text));
             },
+          ),
+          ListTile(
+            title: const Text('Сборка'),
+            subtitle: Text(kBuild),
           ),
           const ListTile(
             title: Text('О приложении'),
