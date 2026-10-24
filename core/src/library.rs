@@ -515,6 +515,17 @@ impl Library {
         // Файла нет (его удалили вне приложения): трек всё равно возвращается, а сам файл
         // будет получен с другого устройства при ближайшей синхронизации.
         let have_file = saved.exists();
+        if !have_file {
+            // стёртый из корзины насовсем (вручную или по сроку) трек не воскрешаем
+            let in_trash: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM trash WHERE track_id = ?1",
+                [track_id],
+                |r| r.get(0),
+            )?;
+            if in_trash == 0 {
+                return Err(Error::Invalid("трек стёрт из корзины насовсем".into()));
+            }
+        }
         let pdir = self.playlist_dir(&t.playlist_id)?;
         let was_deleted: i64 = self.conn.query_row(
             "SELECT deleted FROM playlists WHERE playlist_id = ?1",
