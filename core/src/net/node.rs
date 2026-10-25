@@ -4,7 +4,7 @@
 //! состояние библиотеки). Входящее подключение во время чужого сеанса просто отклоняется:
 //! другое устройство повторит попытку позже.
 
-use super::channel::{handshake_initiator, handshake_responder, Transport};
+use super::channel::{handshake_initiator, handshake_responder, Secure, Transport};
 use super::identity::{Family, Identity};
 use super::session::{run_session, Hello, LibHandle, Role, SessionReport};
 use super::{hex, now_ms, unhex};
@@ -184,24 +184,40 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         Err(bad("сборка без связи через интернет"))
     }
 
-    /// Подключается: сначала по локальной сети, потом (если разрешено) через интернет.
-    fn dial(
+    /// Подключается и проходит рукопожатие: сначала по локальной сети, потом (если разрешено)
+    /// через интернет. Если по сети соединение есть, но рукопожатие не прошло (например,
+    /// VPN или чужое устройство на том же адресе), пробуется интернет.
+    fn dial_secure(
         &self,
         addrs: &[String],
         endpoint: &str,
         internet: bool,
-    ) -> Result<(Box<dyn Transport>, String)> {
+        psk: Option<[u8; 32]>,
+    ) -> Result<(Secure, String)> {
         let mut notes: Vec<String> = Vec::new();
         if !addrs.is_empty() {
             match Self::connect(addrs) {
-                Ok((s, a)) => return Ok((Box::new(s), a)),
+                Ok((mut s, a)) => {
+                    // по своей сети ответ приходит быстро: долго ждать нечего
+                    s.set_timeout(8);
+                    match handshake_initiator(s, &self.ident.keys, psk) {
+                        Ok(mut ch) => {
+                            ch.set_timeout(20);
+                            return Ok((ch, a));
+                        }
+                        Err(e) => notes.push(explain(e, &via_text(&a)).to_string()),
+                    }
+                }
                 Err(e) => notes.push(e.to_string()),
             }
         }
         if internet && !endpoint.is_empty() {
             self.log("Подключаюсь через интернет");
             match self.connect_inet(endpoint) {
-                Ok(s) => return Ok((s, String::new())),
+                Ok(s) => match handshake_initiator(s, &self.ident.keys, psk) {
+                    Ok(ch) => return Ok((ch, String::new())),
+                    Err(e) => notes.push(explain(e, &via_text("")).to_string()),
+                },
                 Err(e) => notes.push(format!("через интернет: {e}")),
             }
         }
@@ -534,10 +550,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let psk = key32(secret_hex)?;
         let expected = unhex(public_hex).ok_or_else(|| bad("ключ устройства повреждён"))?;
         self.spawn_job("Сопряжение", move |me| {
-            let (stream, addr) = me.dial(&addrs, &endpoint, internet)?;
-            let via = via_text(&addr);
-            let mut ch = handshake_initiator(stream, &me.ident.keys, Some(psk))
-                .map_err(|e| explain(e, &via))?;
+            let (mut ch, addr) = me.dial_secure(&addrs, &endpoint, internet, Some(psk))?;
             if ch.remote_static != expected {
                 return Err(bad("ключ устройства не совпал с QR-кодом"));
             }
@@ -585,10 +598,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let endpoint = peer.endpoint.clone();
         let title = format!("Синхронизация с «{}»", peer.name);
         self.spawn_job(&title, move |me| {
-            let (stream, addr) = me.dial(&addrs, &endpoint, internet)?;
-            let via = via_text(&addr);
-            let mut ch =
-                handshake_initiator(stream, &me.ident.keys, None).map_err(|e| explain(e, &via))?;
+            let (mut ch, addr) = me.dial_secure(&addrs, &endpoint, internet, None)?;
             if hex(&ch.remote_static) != peer.public_key {
                 return Err(bad(
                     "ключ устройства изменился: отзовите его и добавьте заново",
