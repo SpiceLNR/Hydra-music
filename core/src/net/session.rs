@@ -45,6 +45,9 @@ pub struct Hello {
     /// могла потом сама найти дорогу обратно, даже если поиск по сети не работает).
     #[serde(default)]
     pub port: u16,
+    /// Адрес этого устройства для связи через интернет (id iroh); пусто, если не включено.
+    #[serde(default)]
+    pub endpoint: String,
 }
 
 impl Hello {
@@ -54,7 +57,13 @@ impl Hello {
             device_id: device_id.to_string(),
             name: name.to_string(),
             port,
+            endpoint: String::new(),
         }
+    }
+
+    pub fn with_endpoint(mut self, endpoint: String) -> Hello {
+        self.endpoint = endpoint;
+        self
     }
 }
 

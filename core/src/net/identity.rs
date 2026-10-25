@@ -65,6 +65,9 @@ pub struct Peer {
     /// Последний адрес `ip:порт`, по которому устройство отвечало.
     #[serde(default)]
     pub last_addr: String,
+    /// Адрес для связи через интернет (id iroh); известен после первой синхронизации.
+    #[serde(default)]
+    pub endpoint: String,
 }
 
 /// Доверенные устройства. Хранятся в `family.json`.
@@ -115,9 +118,21 @@ impl Family {
                 added_ms: now_ms(),
                 last_sync_ms: 0,
                 last_addr: addr.to_string(),
+                endpoint: String::new(),
             });
         }
         self.save()
+    }
+
+    /// Запоминает адрес устройства для связи через интернет.
+    pub fn set_endpoint(&mut self, device_id: &str, endpoint: &str) -> Result<()> {
+        if let Some(p) = self.peers.iter_mut().find(|p| p.device_id == device_id) {
+            if p.endpoint != endpoint {
+                p.endpoint = endpoint.to_string();
+                return self.save();
+            }
+        }
+        Ok(())
     }
 
     pub fn touch(&mut self, device_id: &str, addr: &str) -> Result<()> {
