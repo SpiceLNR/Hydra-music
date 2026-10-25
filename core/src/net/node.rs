@@ -66,6 +66,29 @@ fn bad<E: std::fmt::Display>(e: E) -> Error {
     Error::Invalid(e.to_string())
 }
 
+/// Каким путём установлено соединение (для сообщений об ошибках).
+fn via_text(addr: &str) -> String {
+    if addr.is_empty() {
+        "через интернет".to_string()
+    } else {
+        format!("по сети, {addr}")
+    }
+}
+
+/// Сбой на этапе рукопожатия: чаще всего собеседник сразу закрыл соединение.
+fn explain(e: Error, via: &str) -> Error {
+    let text = e.to_string();
+    if text.contains("fill whole buffer") || text.contains("unexpected end") {
+        bad(format!(
+            "устройство ответило и закрыло соединение ({via}). Проверьте, что QR-код на втором \
+             устройстве ещё действует (3 минуты) и что на нём не идёт другая синхронизация; \
+             причина записана в журнале того устройства"
+        ))
+    } else {
+        bad(format!("{text} ({via})"))
+    }
+}
+
 fn key32(secret_hex: &str) -> Result<[u8; 32]> {
     let v = unhex(secret_hex).ok_or_else(|| bad("секрет сопряжения повреждён"))?;
     v.try_into().map_err(|_| bad("секрет сопряжения повреждён"))
@@ -313,6 +336,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     fn incoming(self: Arc<Self>, mut stream: Box<dyn Transport>, ip: String) {
         stream.set_timeout(20);
         let Some(_guard) = self.try_session() else {
+            self.log("Входящее подключение отклонено: уже идёт другая синхронизация");
             return; // занято: собеседник повторит попытку
         };
         lock(&self.st).busy = true;
@@ -321,7 +345,14 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         match &res {
             Ok(_) => {}
             // чужие/случайные подключения (сканеры портов и т. п.) не показываем как сбой
-            Err(e) => self.log(&format!("Входящее подключение от {ip}: {e}")),
+            Err(e) => {
+                let from = if ip.is_empty() {
+                    "из интернета".to_string()
+                } else {
+                    ip.clone()
+                };
+                self.log(&format!("Входящее подключение ({from}): {e}"))
+            }
         }
         self.finish(res, true);
     }
@@ -504,7 +535,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let expected = unhex(public_hex).ok_or_else(|| bad("ключ устройства повреждён"))?;
         self.spawn_job("Сопряжение", move |me| {
             let (stream, addr) = me.dial(&addrs, &endpoint, internet)?;
-            let mut ch = handshake_initiator(stream, &me.ident.keys, Some(psk))?;
+            let via = via_text(&addr);
+            let mut ch = handshake_initiator(stream, &me.ident.keys, Some(psk))
+                .map_err(|e| explain(e, &via))?;
             if ch.remote_static != expected {
                 return Err(bad("ключ устройства не совпал с QR-кодом"));
             }
@@ -553,7 +586,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let title = format!("Синхронизация с «{}»", peer.name);
         self.spawn_job(&title, move |me| {
             let (stream, addr) = me.dial(&addrs, &endpoint, internet)?;
-            let mut ch = handshake_initiator(stream, &me.ident.keys, None)?;
+            let via = via_text(&addr);
+            let mut ch =
+                handshake_initiator(stream, &me.ident.keys, None).map_err(|e| explain(e, &via))?;
             if hex(&ch.remote_static) != peer.public_key {
                 return Err(bad(
                     "ключ устройства изменился: отзовите его и добавьте заново",

@@ -162,6 +162,26 @@ class _StatusCard extends StatelessWidget {
       lines.add(const SizedBox(height: 8));
       lines.add(Text(net.error, style: const TextStyle(color: Metro.danger)));
     }
+    if (net.log.isNotEmpty) {
+      // журнал помогает понять, почему сопряжение или синхронизация не прошли
+      lines.add(Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: EdgeInsets.zero,
+          title: const Text('Журнал', style: TextStyle(fontSize: 14, color: Metro.textDim)),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SelectableText(
+                net.log.reversed.take(15).join('\n'),
+                style: const TextStyle(fontSize: 12, color: Metro.textDim),
+              ),
+            ),
+          ],
+        ),
+      ));
+    }
     if (lines.isEmpty) {
       return const SizedBox.shrink();
     }
