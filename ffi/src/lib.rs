@@ -103,6 +103,23 @@ fn load_or_create_device_id(data_dir: &std::path::Path) -> Result<String, String
     Ok(id)
 }
 
+/// Постоянный ключ iroh этого устройства (32 случайных байта в файле рядом с базой).
+fn load_or_create_iroh_key(data_dir: &std::path::Path) -> Result<[u8; 32], String> {
+    let path = data_dir.join("iroh.key");
+    if let Ok(text) = fs::read_to_string(&path) {
+        if let Some(bytes) = hydra_core::net::unhex(&text) {
+            if let Ok(key) = <[u8; 32]>::try_from(bytes) {
+                return Ok(key);
+            }
+        }
+    }
+    let mut key = [0u8; 32];
+    key[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    key[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    fs::write(&path, hydra_core::net::hex(&key)).map_err(es)?;
+    Ok(key)
+}
+
 fn open(args: &Value) -> Result<Value, String> {
     let root = PathBuf::from(arg_str(args, "root")?);
     let data_dir = PathBuf::from(arg_str(args, "data_dir")?);
@@ -275,6 +292,17 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
             guard.clone().ok_or("network node missing")?
         };
         n.start().map_err(es)?;
+        // Связь через интернет необязательна: если не поднялась, остаётся локальная сеть,
+        // а причина видна в статусе.
+        if args
+            .get("internet")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        {
+            if let Ok(secret) = load_or_create_iroh_key(&data_dir) {
+                let _ = n.enable_internet(secret);
+            }
+        }
         return Ok(n.status_json());
     }
     let n = node()?;
@@ -293,8 +321,19 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
                 .iter()
                 .filter_map(|v| v.as_str().map(|x| x.to_string()))
                 .collect();
-            n.pair_with(
+            let endpoint = args
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let internet = args
+                .get("internet")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            n.pair_with_ex(
                 addrs,
+                endpoint,
+                internet,
                 &arg_str(args, "public_key")?,
                 &arg_str(args, "secret")?,
             )
@@ -302,7 +341,12 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "net_sync" => {
-            n.sync_peer(&arg_str(args, "device_id")?).map_err(es)?;
+            let internet = args
+                .get("internet")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            n.sync_peer_ex(&arg_str(args, "device_id")?, internet)
+                .map_err(es)?;
             Ok(Value::Null)
         }
         "net_forget" => to_json(n.forget(&arg_str(args, "device_id")?)),

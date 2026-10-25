@@ -10,7 +10,8 @@ name = "hydra_ffi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-hydra_core = { path = "../core" }
+# связь через интернет (iroh) включена: без неё устройства видят друг друга только в одной сети
+hydra_core = { path = "../core", features = ["internet"] }
 serde = "1"
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }

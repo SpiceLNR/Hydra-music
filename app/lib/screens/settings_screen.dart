@@ -43,6 +43,16 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     if (state == AppLifecycleState.resumed) _readBattery();
   }
 
+  String _internetText() {
+    if (!hydraNet.internetOn) return 'Выключено: устройства синхронизируются только в одной сети Wi-Fi.';
+    if (hydraNet.internetError.isNotEmpty) return 'Не запустилось: ${hydraNet.internetError}';
+    if (hydraNet.endpoint.isEmpty) {
+      return 'Включено. Заработает после перезапуска приложения.';
+    }
+    return 'Работает. Устройства из вашей семьи находят друг друга и вне дома: '
+        'напрямую или через промежуточный сервер. Музыка при этом идёт зашифрованной.';
+  }
+
   Future<void> _readBattery() async {
     if (!Platform.isAndroid) return;
     final v = await hydraNet.batteryExempt();
@@ -125,6 +135,27 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                     style: const TextStyle(fontSize: 13, color: Metro.textDim),
                   ),
                 ),
+                MetroSwitchRow(
+                  title: 'Связь через интернет',
+                  value: hydraNet.internetOn,
+                  onChanged: hydraNet.setInternetOn,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    _internetText(),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hydraNet.internetError.isNotEmpty ? Metro.danger : Metro.textDim,
+                    ),
+                  ),
+                ),
+                if (Platform.isAndroid)
+                  MetroSwitchRow(
+                    title: 'Через интернет только по Wi-Fi',
+                    value: hydraNet.internetWifiOnly,
+                    onChanged: hydraNet.internetOn ? hydraNet.setInternetWifiOnly : (_) {},
+                  ),
                 if (Platform.isAndroid) ...[
                   MetroSwitchRow(
                     title: 'Только во время зарядки',

@@ -10,6 +10,27 @@ use snow::{params::NoiseParams, Builder, HandshakeState, TransportState};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
+/// Любое двустороннее соединение, по которому идёт Noise: TCP в локальной сети
+/// или поток iroh через интернет.
+pub trait Transport: Read + Write + Send {
+    /// Предельное время ожидания чтения и записи.
+    fn set_timeout(&mut self, secs: u64);
+}
+
+impl Transport for Box<dyn Transport> {
+    fn set_timeout(&mut self, secs: u64) {
+        (**self).set_timeout(secs);
+    }
+}
+
+impl Transport for TcpStream {
+    fn set_timeout(&mut self, secs: u64) {
+        let d = Some(std::time::Duration::from_secs(secs));
+        let _ = self.set_read_timeout(d);
+        let _ = self.set_write_timeout(d);
+    }
+}
+
 const NOISE_XX: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 const NOISE_XXPSK3: &str = "Noise_XXpsk3_25519_ChaChaPoly_SHA256";
 const MAX_FRAME: usize = 65535;
@@ -59,7 +80,7 @@ fn read_frame<R: Read>(r: &mut R) -> Result<Vec<u8>> {
 
 /// Установленный защищённый канал.
 pub struct Secure {
-    stream: TcpStream,
+    stream: Box<dyn Transport>,
     transport: TransportState,
     /// Открытый ключ собеседника (проверен рукопожатием).
     pub remote_static: Vec<u8>,
@@ -75,7 +96,7 @@ fn builder_with<'a>(p: NoiseParams, keys: &'a Keys, psk: &'a Option<[u8; 32]>) -
     b
 }
 
-fn finish(stream: TcpStream, hs: HandshakeState) -> Result<Secure> {
+fn finish(stream: Box<dyn Transport>, hs: HandshakeState) -> Result<Secure> {
     if !hs.is_handshake_finished() {
         return Err(noise("рукопожатие не завершено"));
     }
@@ -100,8 +121,8 @@ fn finish(stream: TcpStream, hs: HandshakeState) -> Result<Secure> {
 }
 
 /// Сторона, которая подключилась. `psk` - секрет из QR при сопряжении.
-pub fn handshake_initiator(
-    mut stream: TcpStream,
+pub fn handshake_initiator<S: Transport + 'static>(
+    mut stream: S,
     keys: &Keys,
     psk: Option<[u8; 32]>,
 ) -> Result<Secure> {
@@ -119,13 +140,13 @@ pub fn handshake_initiator(
     // -> s, se (и psk)
     let n = hs.write_message(&[], &mut buf).map_err(noise)?;
     write_frame(&mut stream, &buf[..n])?;
-    finish(stream, hs)
+    finish(Box::new(stream), hs)
 }
 
 /// Сторона, которая приняла подключение. `psk` - секрет активного предложения сопряжения
 /// (если оно есть). Возвращает канал и признак «это сопряжение».
-pub fn handshake_responder(
-    mut stream: TcpStream,
+pub fn handshake_responder<S: Transport + 'static>(
+    mut stream: S,
     keys: &Keys,
     psk: Option<[u8; 32]>,
 ) -> Result<(Secure, bool)> {
@@ -153,7 +174,7 @@ pub fn handshake_responder(
     // <- s, se (и psk)
     let m = read_frame(&mut stream)?;
     hs.read_message(&m, &mut buf).map_err(noise)?;
-    Ok((finish(stream, hs)?, pairing))
+    Ok((finish(Box::new(stream), hs)?, pairing))
 }
 
 impl Secure {
@@ -207,9 +228,7 @@ impl Secure {
         Ok(v)
     }
 
-    pub fn set_timeout(&self, secs: u64) {
-        let d = Some(std::time::Duration::from_secs(secs));
-        let _ = self.stream.set_read_timeout(d);
-        let _ = self.stream.set_write_timeout(d);
+    pub fn set_timeout(&mut self, secs: u64) {
+        self.stream.set_timeout(secs);
     }
 }

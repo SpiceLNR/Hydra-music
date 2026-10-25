@@ -1,4 +1,4 @@
-//! Синхронизация между устройствами по локальной сети.
+//! Синхронизация между устройствами: по локальной сети (TCP) и через интернет (iroh).
 //!
 //! Слои:
 //!  * `channel` - шифрованный канал Noise поверх TCP (XX, а при сопряжении XXpsk3 с одноразовым
@@ -9,6 +9,8 @@
 
 pub mod channel;
 pub mod identity;
+#[cfg(feature = "internet")]
+pub mod inet;
 pub mod node;
 pub mod session;
 

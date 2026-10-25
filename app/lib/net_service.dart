@@ -20,6 +20,7 @@ class PairLink {
     required this.secret,
     required this.port,
     required this.addrs,
+    this.endpoint = '',
   });
 
   final String deviceId;
@@ -29,7 +30,10 @@ class PairLink {
   final int port;
   final List<String> addrs;
 
-  /// `hydra://pair?k=..&s=..&p=..&a=ip1,ip2` (короче код = проще считывается камерой).
+  /// Адрес устройства в интернете (iroh); пусто, если связь через интернет выключена.
+  final String endpoint;
+
+  /// `hydra://pair?k=..&s=..&p=..&a=ip1,ip2&e=..` (короче код = проще считывается камерой).
   String toUri() => Uri(
         scheme: 'hydra',
         host: 'pair',
@@ -38,6 +42,7 @@ class PairLink {
           's': secret,
           'p': '$port',
           'a': addrs.join(','),
+          if (endpoint.isNotEmpty) 'e': endpoint,
         },
       ).toString();
 
@@ -49,7 +54,10 @@ class PairLink {
     final addrs = (q['a'] ?? '').split(',').where((a) => a.isNotEmpty).toList();
     final key = q['k'];
     final secret = q['s'];
-    if (port == null || addrs.isEmpty || key == null || secret == null) return null;
+    final endpoint = q['e'] ?? '';
+    if (port == null || (addrs.isEmpty && endpoint.isEmpty) || key == null || secret == null) {
+      return null;
+    }
     return PairLink(
       deviceId: q['d'] ?? '',
       name: q['n'] ?? 'устройство',
@@ -57,6 +65,7 @@ class PairLink {
       secret: secret,
       port: port,
       addrs: addrs,
+      endpoint: endpoint,
     );
   }
 }
@@ -85,6 +94,8 @@ class NetService extends ChangeNotifier {
   int _watchers = 0;
   Timer? _timer;
   bool _polling = false;
+  bool _quietRun = false;
+  String _hiddenError = '';
 
   static String _defaultName() {
     if (Platform.isAndroid) return 'Телефон';
@@ -153,18 +164,64 @@ class NetService extends ChangeNotifier {
   /// Автосинхронизировать только пока телефон заряжается (Android).
   bool autoOnlyCharging = false;
 
+  /// Связь через интернет (iroh) включена. Изменение вступает в силу после перезапуска приложения.
+  bool internetOn = true;
+
+  /// Через интернет синхронизироваться только по неплатной сети (Wi-Fi), а не по мобильному интернету.
+  bool internetWifiOnly = true;
+
+  /// Адрес этого устройства в интернете и причина, если связь через интернет не поднялась.
+  String endpoint = '';
+  String internetError = '';
+
+  Future<void> setInternetOn(bool value) async {
+    internetOn = value;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('internet_on', value);
+    } on Object {
+      // не сохранилось: заработает до перезапуска
+    }
+  }
+
+  Future<void> setInternetWifiOnly(bool value) async {
+    internetWifiOnly = value;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('internet_wifi_only', value);
+    } on Object {
+      // не сохранилось: заработает до перезапуска
+    }
+  }
+
+  /// Можно ли сейчас идти через интернет (включено и не запрещено правилом про мобильную сеть).
+  Future<bool> _internetAllowed() async {
+    if (!internetOn) return false;
+    if (!internetWifiOnly || !Platform.isAndroid) return true;
+    try {
+      return await _service.invokeMethod<bool>('unmetered') ?? true;
+    } on Object {
+      return true;
+    }
+  }
+
   Timer? _autoTimer;
   final Map<String, DateTime> _lastAuto = {};
   final Set<String> _online = {};
 
   static const Duration _autoEvery = Duration(minutes: 3);
   static const Duration _autoGap = Duration(minutes: 10);
+  static const Duration _autoGapInternet = Duration(minutes: 15);
 
   Future<void> _loadPrefs() async {
     try {
       final p = await SharedPreferences.getInstance();
       autoSync = p.getBool('auto_sync') ?? true;
       autoOnlyCharging = p.getBool('auto_only_charging') ?? false;
+      internetOn = p.getBool('internet_on') ?? true;
+      internetWifiOnly = p.getBool('internet_wifi_only') ?? true;
     } on Object {
       // настройки не прочитались: остаются значения по умолчанию
     }
@@ -238,6 +295,16 @@ class NetService extends ChangeNotifier {
       await sync(d, quiet: true);
       return; // по одному устройству за раз
     }
+    // Устройств рядом нет: пробуем достать через интернет те, чей адрес известен (реже)
+    if (endpoint.isEmpty || !await _internetAllowed()) return;
+    for (final d in devices) {
+      if (d.online || !d.internet) continue;
+      final last = _lastAuto[d.id];
+      if (last != null && now.difference(last) < _autoGapInternet) continue;
+      _lastAuto[d.id] = now;
+      await sync(d, quiet: true);
+      return;
+    }
   }
 
   /// Устройство только что появилось в сети: синхронизируемся с ним сразу.
@@ -300,7 +367,7 @@ class NetService extends ChangeNotifier {
     await _loadPrefs();
     deviceName = _defaultName();
     try {
-      await Core.call('net_start', {'name': deviceName});
+      await Core.call('net_start', {'name': deviceName, 'internet': internetOn});
       started = true;
       error = '';
     } on CoreException catch (e) {
@@ -344,7 +411,13 @@ class NetService extends ChangeNotifier {
       busy = st['busy'] as bool;
       message = st['message'] as String;
       unawaited(_keepAwake(busy, message));
-      error = st['error'] as String;
+      final coreError = st['error'] as String;
+      // ошибки тихих (автоматических) попыток пользователю не показываем
+      if (_quietRun && coreError.isNotEmpty) _hiddenError = coreError;
+      if (coreError.isEmpty) _hiddenError = '';
+      error = coreError == _hiddenError ? '' : coreError;
+      endpoint = (st['endpoint'] as String?) ?? '';
+      internetError = (st['internet_error'] as String?) ?? '';
       log = (st['log'] as List).cast<String>();
       familyGeneration = (st['family_generation'] as num).toInt();
       devices = list.cast<Map<String, dynamic>>().map(DeviceInfo.fromJson).toList();
@@ -403,6 +476,7 @@ class NetService extends ChangeNotifier {
       secret: o['secret'] as String,
       port: (o['port'] as num).toInt(),
       addrs: await localAddresses(),
+      endpoint: (o['endpoint'] as String?) ?? '',
     );
   }
 
@@ -416,11 +490,14 @@ class NetService extends ChangeNotifier {
 
   /// Подключается к устройству, показавшему QR, и сразу синхронизируется с ним.
   Future<void> pairWith(PairLink link) async {
+    _quietRun = false;
     await start();
     await _keepAwake(true, 'Сопряжение');
     try {
       await Core.call('net_pair_connect', {
         'addrs': [for (final a in link.addrs) '$a:${link.port}'],
+        'endpoint': link.endpoint,
+        'internet': await _internetAllowed(),
         'public_key': link.publicKey,
         'secret': link.secret,
       });
@@ -436,11 +513,12 @@ class NetService extends ChangeNotifier {
   }
 
   Future<void> sync(DeviceInfo d, {bool quiet = false}) async {
+    _quietRun = quiet;
     // сначала подхватываем изменения в папке (файлы, удалённые в проводнике)
     await hydraLibrary.refresh();
     await _keepAwake(true, 'Синхронизация с «${d.name}»');
     try {
-      await Core.call('net_sync', {'device_id': d.id});
+      await Core.call('net_sync', {'device_id': d.id, 'internet': await _internetAllowed()});
       error = '';
     } on CoreException catch (e) {
       if (!quiet) error = e.message;

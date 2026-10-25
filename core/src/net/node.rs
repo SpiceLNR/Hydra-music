@@ -4,7 +4,7 @@
 //! состояние библиотеки). Входящее подключение во время чужого сеанса просто отклоняется:
 //! другое устройство повторит попытку позже.
 
-use super::channel::{handshake_initiator, handshake_responder};
+use super::channel::{handshake_initiator, handshake_responder, Transport};
 use super::identity::{Family, Identity};
 use super::session::{run_session, Hello, LibHandle, Role, SessionReport};
 use super::{hex, now_ms, unhex};
@@ -41,6 +41,10 @@ struct Status {
     report: Option<Value>,
     /// device_id -> (адрес ip:порт, когда замечено)
     found: HashMap<String, (String, u64)>,
+    /// Адрес этого устройства в интернете (iroh); пусто, пока связь через интернет не поднята.
+    endpoint: String,
+    /// Почему связь через интернет не заработала (пусто, если всё в порядке или не включалась).
+    internet_error: String,
 }
 
 pub struct Node<H> {
@@ -50,6 +54,8 @@ pub struct Node<H> {
     offer: Mutex<Option<Offer>>,
     session: Mutex<()>,
     st: Mutex<Status>,
+    #[cfg(feature = "internet")]
+    inet: Mutex<Option<Arc<super::inet::Inet>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -74,6 +80,8 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             offer: Mutex::new(None),
             session: Mutex::new(()),
             st: Mutex::new(Status::default()),
+            #[cfg(feature = "internet")]
+            inet: Mutex::new(None),
         })
     }
 
@@ -98,7 +106,87 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     }
 
     fn hello(&self) -> Hello {
-        Hello::new(&self.ident.device_id, &self.ident.name, lock(&self.st).port)
+        let port = lock(&self.st).port;
+        let endpoint = lock(&self.st).endpoint.clone();
+        Hello::new(&self.ident.device_id, &self.ident.name, port).with_endpoint(endpoint)
+    }
+
+    // ---------- интернет (iroh) ----------
+
+    /// Включает связь через интернет с постоянным ключом `secret`. Ошибка не мешает работе
+    /// в локальной сети: причина видна в `status` (`internet_error`).
+    #[cfg(feature = "internet")]
+    pub fn enable_internet(self: &Arc<Self>, secret: [u8; 32]) -> Result<()> {
+        if lock(&self.inet).is_some() {
+            return Ok(());
+        }
+        let me = Arc::clone(self);
+        let on_stream: Arc<dyn Fn(super::inet::IrohStream) + Send + Sync> =
+            Arc::new(move |stream| Arc::clone(&me).incoming(Box::new(stream), String::new()));
+        match super::inet::Inet::start(secret, on_stream) {
+            Ok(inet) => {
+                let id = inet.id().to_string();
+                *lock(&self.inet) = Some(inet);
+                let mut st = lock(&self.st);
+                st.endpoint = id;
+                st.internet_error.clear();
+                drop(st);
+                self.log("Связь через интернет включена");
+                Ok(())
+            }
+            Err(e) => {
+                lock(&self.st).internet_error = e.to_string();
+                self.log(&format!("Связь через интернет не запустилась: {e}"));
+                Err(e)
+            }
+        }
+    }
+
+    #[cfg(not(feature = "internet"))]
+    pub fn enable_internet(self: &Arc<Self>, _secret: [u8; 32]) -> Result<()> {
+        lock(&self.st).internet_error = "сборка без связи через интернет".to_string();
+        Err(bad("сборка без связи через интернет"))
+    }
+
+    #[cfg(feature = "internet")]
+    fn connect_inet(&self, endpoint: &str) -> Result<Box<dyn Transport>> {
+        let inet = lock(&self.inet)
+            .clone()
+            .ok_or_else(|| bad("связь через интернет не включена"))?;
+        Ok(Box::new(inet.connect(endpoint)?))
+    }
+
+    #[cfg(not(feature = "internet"))]
+    fn connect_inet(&self, _endpoint: &str) -> Result<Box<dyn Transport>> {
+        Err(bad("сборка без связи через интернет"))
+    }
+
+    /// Подключается: сначала по локальной сети, потом (если разрешено) через интернет.
+    fn dial(
+        &self,
+        addrs: &[String],
+        endpoint: &str,
+        internet: bool,
+    ) -> Result<(Box<dyn Transport>, String)> {
+        let mut notes: Vec<String> = Vec::new();
+        if !addrs.is_empty() {
+            match Self::connect(addrs) {
+                Ok((s, a)) => return Ok((Box::new(s), a)),
+                Err(e) => notes.push(e.to_string()),
+            }
+        }
+        if internet && !endpoint.is_empty() {
+            self.log("Подключаюсь через интернет");
+            match self.connect_inet(endpoint) {
+                Ok(s) => return Ok((s, String::new())),
+                Err(e) => notes.push(format!("через интернет: {e}")),
+            }
+        }
+        if notes.is_empty() {
+            Err(bad("нет адреса устройства"))
+        } else {
+            Err(bad(notes.join("; ")))
+        }
     }
 
     // ---------- запуск ----------
@@ -120,7 +208,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             for conn in listener.incoming() {
                 let Ok(stream) = conn else { continue };
                 let node = Arc::clone(&me);
-                thread::spawn(move || node.incoming(stream));
+                let ip = stream
+                    .peer_addr()
+                    .map(|a| a.ip().to_string())
+                    .unwrap_or_default();
+                thread::spawn(move || node.incoming(Box::new(stream), ip));
             }
         });
         self.start_discovery(port);
@@ -194,6 +286,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             "public_key": self.ident.public_hex(),
             "secret": hex(&secret),
             "port": lock(&self.st).port,
+            "endpoint": lock(&self.st).endpoint,
             "ttl_secs": OFFER_TTL.as_secs(),
         })
     }
@@ -216,13 +309,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     // ---------- входящие ----------
 
-    fn incoming(self: Arc<Self>, stream: TcpStream) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
-        let ip = stream
-            .peer_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_default();
+    /// Входящее соединение: из локальной сети (`ip` - адрес собеседника) или из интернета (`ip` пусто).
+    fn incoming(self: Arc<Self>, mut stream: Box<dyn Transport>, ip: String) {
+        stream.set_timeout(20);
         let Some(_guard) = self.try_session() else {
             return; // занято: собеседник повторит попытку
         };
@@ -237,7 +326,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         self.finish(res, true);
     }
 
-    fn incoming_session(&self, stream: TcpStream, ip: &str) -> Result<SessionReport> {
+    fn incoming_session(&self, stream: Box<dyn Transport>, ip: &str) -> Result<SessionReport> {
         let (mut ch, pairing) = handshake_responder(stream, &self.ident.keys, self.current_psk())?;
         let key = ch.remote_static.clone();
         let known = lock(&self.family).by_key(&key).cloned();
@@ -250,7 +339,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             "Синхронизация"
         });
         let verify = |hello: &Hello| -> Result<()> {
-            let addr = if hello.port == 0 {
+            let addr = if hello.port == 0 || ip.is_empty() {
                 String::new()
             } else {
                 format!("{ip}:{}", hello.port)
@@ -287,6 +376,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         }
         if pairing {
             lock(&self.family).upsert(&hello.device_id, &hello.name, key, addr)?;
+            lock(&self.family).set_endpoint(&hello.device_id, &hello.endpoint)?;
             *lock(&self.offer) = None;
             lock(&self.st).family_generation += 1;
             self.log(&format!("Добавлено устройство «{}»", hello.name));
@@ -294,6 +384,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         } else if expected_id == Some(hello.device_id.as_str()) {
             // обновляем последний известный адрес (он мог смениться)
             lock(&self.family).upsert(&hello.device_id, &hello.name, key, addr)?;
+            lock(&self.family).set_endpoint(&hello.device_id, &hello.endpoint)?;
             Ok(())
         } else {
             Err(bad("устройство представилось чужим именем"))
@@ -320,7 +411,10 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         if errors.is_empty() {
             return Err(bad("нет адреса устройства"));
         }
-        Err(bad(format!("не удалось подключиться ({})", errors.join("; "))))
+        Err(bad(format!(
+            "не удалось подключиться ({})",
+            errors.join("; ")
+        )))
     }
 
     /// Запускает задачу в фоне. Состояние смотрите через `status`.
@@ -394,10 +488,22 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         public_hex: &str,
         secret_hex: &str,
     ) -> Result<()> {
+        self.pair_with_ex(addrs, String::new(), true, public_hex, secret_hex)
+    }
+
+    /// То же, но с адресом устройства в интернете. `internet = false` запрещает идти через интернет.
+    pub fn pair_with_ex(
+        self: &Arc<Self>,
+        addrs: Vec<String>,
+        endpoint: String,
+        internet: bool,
+        public_hex: &str,
+        secret_hex: &str,
+    ) -> Result<()> {
         let psk = key32(secret_hex)?;
         let expected = unhex(public_hex).ok_or_else(|| bad("ключ устройства повреждён"))?;
         self.spawn_job("Сопряжение", move |me| {
-            let (stream, addr) = Self::connect(&addrs)?;
+            let (stream, addr) = me.dial(&addrs, &endpoint, internet)?;
             let mut ch = handshake_initiator(stream, &me.ident.keys, Some(psk))?;
             if ch.remote_static != expected {
                 return Err(bad("ключ устройства не совпал с QR-кодом"));
@@ -418,6 +524,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     /// Синхронизация с устройством из семьи.
     pub fn sync_peer(self: &Arc<Self>, device_id: &str) -> Result<()> {
+        self.sync_peer_ex(device_id, true)
+    }
+
+    /// `internet = false` запрещает идти через интернет (например, на мобильной сети).
+    pub fn sync_peer_ex(self: &Arc<Self>, device_id: &str, internet: bool) -> Result<()> {
         let peer = lock(&self.family)
             .by_id(device_id)
             .cloned()
@@ -429,15 +540,19 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 addrs.push(a);
             }
         }
-        if !peer.last_addr.is_empty() && !addrs.contains(&peer.last_addr) {
+        let by_internet = internet && !peer.endpoint.is_empty();
+        // старый адрес из прошлой синхронизации пробуем, только если интернет не вариант:
+        // вдали от дома это лишние секунды ожидания
+        if !by_internet && !peer.last_addr.is_empty() && !addrs.contains(&peer.last_addr) {
             addrs.push(peer.last_addr.clone());
         }
-        if addrs.is_empty() {
+        if addrs.is_empty() && !by_internet {
             return Err(bad(format!("«{}» сейчас не видно в сети", peer.name)));
         }
+        let endpoint = peer.endpoint.clone();
         let title = format!("Синхронизация с «{}»", peer.name);
         self.spawn_job(&title, move |me| {
-            let (stream, addr) = Self::connect(&addrs)?;
+            let (stream, addr) = me.dial(&addrs, &endpoint, internet)?;
             let mut ch = handshake_initiator(stream, &me.ident.keys, None)?;
             if hex(&ch.remote_static) != peer.public_key {
                 return Err(bad(
@@ -484,6 +599,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     "name": p.name,
                     "last_sync_ms": p.last_sync_ms,
                     "online": online,
+                    "internet": !p.endpoint.is_empty(),
                 })
             })
             .collect();
@@ -501,6 +617,8 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             "error": st.error,
             "generation": st.generation,
             "family_generation": st.family_generation,
+            "endpoint": st.endpoint,
+            "internet_error": st.internet_error,
             "log": st.log.iter().collect::<Vec<_>>(),
             "report": st.report,
         })

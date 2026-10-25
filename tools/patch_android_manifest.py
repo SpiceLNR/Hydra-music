@@ -183,6 +183,7 @@ MAIN_ACTIVITY_KT = """package __PKG__
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
@@ -242,6 +243,10 @@ class MainActivity : AudioServiceActivity() {
                     "stop" -> {
                         stopService(Intent(this, SyncService::class.java))
                         result.success(true)
+                    }
+                    "unmetered" -> {
+                        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                        result.success(!cm.isActiveNetworkMetered)
                     }
                     "charging" -> {
                         val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -340,7 +345,7 @@ def patch_activity() -> int:
             print("В MainActivity.kt нет строки package.")
             return 1
         pkg = m.group(1)
-        if "requestBatteryExemption" not in t:
+        if "unmetered" not in t:
             f.write_text(MAIN_ACTIVITY_KT.replace("__PKG__", pkg), encoding="utf-8")
             print("MainActivity: AudioServiceActivity + канал службы синхронизации")
         else:
