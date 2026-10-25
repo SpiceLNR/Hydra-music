@@ -36,7 +36,7 @@ class DesktopShell extends StatelessWidget {
 
 enum _Mode { playlist, trash }
 
-enum _TrackAction { play, rename, cover, move, delete }
+enum _TrackAction { play, rename, artist, cover, move, delete }
 
 enum _PlaylistAction { open, rename, delete }
 
@@ -50,7 +50,10 @@ class _ExpandedShell extends StatefulWidget {
 }
 
 class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObserver {
-  String? _playlistId;
+  /// Выбранный плейлист переживает сворачивание шторки (окно при этом пересоздаётся).
+  static String? _rememberedPlaylistId;
+
+  String? _playlistId = _rememberedPlaylistId;
   List<TrackInfo> _tracks = const [];
   List<TrashItem> _trash = const [];
   String? _selectedId;
@@ -109,6 +112,7 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
       _playlistId = pls.isEmpty ? null : pls.first.id;
       _tracks = const [];
     }
+    _rememberedPlaylistId = _playlistId;
     if (_mode == _Mode.trash) {
       unawaited(_loadTrash());
     } else {
@@ -164,6 +168,7 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
   }
 
   void _selectPlaylist(String id) {
+    _rememberedPlaylistId = id;
     setState(() {
       _playlistId = id;
       _listOpen = false;
@@ -310,9 +315,29 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     if (title == null || title.isEmpty || title == t.title) return;
     try {
       final written = await hydraLibrary.renameTrack(t.id, title);
+      PlayerService.instance.updateTrack(t.copyWith(title: title));
       _toast(written
           ? 'Название записано в файл.'
           : 'Этот формат не хранит теги: название сохранено только в приложении.');
+    } on CoreException catch (e) {
+      _toast(e.message);
+    }
+    await _loadTracks();
+  }
+
+  /// Исполнитель: пустое поле убирает исполнителя.
+  Future<void> _editArtist(TrackInfo t) async {
+    final artist = await _askText(
+        title: 'Исполнитель', initial: t.artist ?? '', hint: 'Исполнитель', okLabel: 'Сохранить');
+    if (artist == null || artist == (t.artist ?? '')) return;
+    try {
+      final written = await hydraLibrary.editTrack(t.id, t.title, artist);
+      PlayerService.instance.updateTrack(
+        t.copyWith(artist: artist.isEmpty ? null : artist, clearArtist: artist.isEmpty),
+      );
+      _toast(written
+          ? 'Исполнитель записан в файл.'
+          : 'Этот формат не хранит теги: исполнитель сохранён только в приложении.');
     } on CoreException catch (e) {
       _toast(e.message);
     }
@@ -391,6 +416,7 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     final action = await showMetroMenu<_TrackAction>(context, pos, const [
       MetroMenuItem(value: _TrackAction.play, label: 'Играть', icon: Icons.play_arrow),
       MetroMenuItem(value: _TrackAction.rename, label: 'Название', icon: Icons.edit_outlined),
+      MetroMenuItem(value: _TrackAction.artist, label: 'Исполнитель', icon: Icons.person_outline),
       MetroMenuItem(value: _TrackAction.cover, label: 'Обложка', icon: Icons.image_outlined),
       MetroMenuItem(
           value: _TrackAction.move, label: 'Переместить', icon: Icons.drive_file_move_outline),
@@ -402,6 +428,8 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
         await _play(index);
       case _TrackAction.rename:
         await _renameTrack(t);
+      case _TrackAction.artist:
+        await _editArtist(t);
       case _TrackAction.cover:
         await _changeCover(t);
       case _TrackAction.move:
@@ -427,6 +455,8 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     _queue = _queue.then((_) async {
       try {
         await hydraLibrary.reorder(moved.id, target);
+        // играющая очередь повторяет новый порядок плейлиста
+        unawaited(PlayerService.instance.syncOrder(_tracks));
       } on CoreException catch (e) {
         _toast(e.message);
         await _loadTracks();

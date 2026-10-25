@@ -254,18 +254,44 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
       rebuilt = [if (cur != null && !inBase) cur, ..._base];
     }
     if (rebuilt == null || cur == null) return;
-    final at = max(0, rebuilt.indexWhere((t) => t.id == cur.id));
+    await _reopen(rebuilt, max(0, rebuilt.indexWhere((t) => t.id == cur.id)));
+  }
+
+  /// Заменяет очередь, не прерывая текущий трек: он продолжается с того же места.
+  Future<void> _reopen(List<TrackInfo> newQueue, int at) async {
     final wasPlaying = playing;
     final pos = position;
-    queue = rebuilt;
+    queue = newQueue;
     index = at;
     notifyListeners();
     await _engine.open([for (final t in queue) t.path], index);
-    await _engine.setRepeatOne(next == PlayMode.repeat);
+    await _engine.setRepeatOne(mode == PlayMode.repeat);
     if (pos > Duration.zero) await _engine.seek(pos);
     if (!wasPlaying) await _engine.pause();
     _publishTrack();
     _publish();
+  }
+
+  /// Порядок плейлиста изменили (перетащили трек): играющая очередь повторяет его,
+  /// если она и есть этот плейлист в обычном порядке. Состав треков не должен меняться.
+  Future<void> syncOrder(List<TrackInfo> tracks) async {
+    if (queue.isEmpty || _random || tracks.length != _base.length) return;
+    final ids = {for (final t in tracks) t.id};
+    if (!_base.every((t) => ids.contains(t.id))) return;
+    var same = true;
+    for (var i = 0; i < tracks.length; i++) {
+      if (tracks[i].id != _base[i].id) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return;
+    _base = List.of(tracks);
+    final cur = current;
+    if (cur == null) return;
+    final at = tracks.indexWhere((t) => t.id == cur.id);
+    if (at < 0) return;
+    await _reopen(List.of(tracks), at);
   }
 
   Future<void> playOrPause() => playing ? pause() : play();

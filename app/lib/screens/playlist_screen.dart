@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -158,6 +160,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _reorderQueue = _reorderQueue.then((_) async {
       try {
         await hydraLibrary.reorder(moved.id, target);
+        // играющая очередь повторяет новый порядок плейлиста
+        unawaited(PlayerService.instance.syncOrder(_tracks));
       } on CoreException catch (e) {
         if (mounted) _toast(e.message);
         await _load();
