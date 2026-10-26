@@ -1062,6 +1062,19 @@ impl Library {
             {
                 continue;
             }
+            // старше срока хранения: корзина всё равно стёрла бы это, не воскрешаем
+            let deleted_ms = meta["deleted_ms"].as_i64().or_else(|| {
+                fs::metadata(&dir)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+            });
+            if let Some(ms) = deleted_ms {
+                if (now_ms as i64).saturating_sub(ms) > 30 * 24 * 3600 * 1000 {
+                    continue;
+                }
+            }
             let playlist_name = meta["playlist_name"].as_str().unwrap_or("").to_string();
             let playlist_name = if playlist_name.trim().is_empty() {
                 "Restored".to_string()

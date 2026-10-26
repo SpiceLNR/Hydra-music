@@ -110,8 +110,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     fn log(&self, text: &str) {
         let mut st = lock(&self.st);
-        st.log.push_back(text.to_string());
-        while st.log.len() > 30 {
+        // время в мс UTC и текст через табуляцию; приложение покажет местное время
+        st.log.push_back(format!("{}\t{}", super::now_ms(), text));
+        while st.log.len() > 100 {
             st.log.pop_front();
         }
     }

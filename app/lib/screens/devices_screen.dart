@@ -7,6 +7,7 @@ import '../net_service.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
+import 'journal_screen.dart';
 import 'pair_screens.dart';
 
 class DevicesScreen extends StatefulWidget {
@@ -88,7 +89,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('устройства')),
+      appBar: AppBar(
+        leading: IconButton(
+          tooltip: 'Журнал',
+          icon: const Icon(Icons.receipt_long),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const JournalScreen()),
+          ),
+        ),
+        title: const Text('устройства'),
+      ),
       body: ListenableBuilder(
         listenable: hydraNet,
         builder: (context, _) {
@@ -161,26 +171,6 @@ class _StatusCard extends StatelessWidget {
     if (net.error.isNotEmpty) {
       lines.add(const SizedBox(height: 8));
       lines.add(Text(net.error, style: const TextStyle(color: Metro.danger)));
-    }
-    if (net.log.isNotEmpty) {
-      // журнал помогает понять, почему сопряжение или синхронизация не прошли
-      lines.add(Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: EdgeInsets.zero,
-          title: const Text('Журнал', style: TextStyle(fontSize: 14, color: Metro.textDim)),
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: SelectableText(
-                net.log.reversed.take(15).join('\n'),
-                style: const TextStyle(fontSize: 12, color: Metro.textDim),
-              ),
-            ),
-          ],
-        ),
-      ));
     }
     if (lines.isEmpty) {
       return const SizedBox.shrink();
