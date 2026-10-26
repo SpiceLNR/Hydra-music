@@ -9,6 +9,14 @@ use crate::{Error, Result};
 use snow::{params::NoiseParams, Builder, HandshakeState, TransportState};
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Номер «эпохи» сеансов: после `cancel_sessions` все идущие сеансы обрываются.
+static EPOCH: AtomicU64 = AtomicU64::new(0);
+
+pub fn cancel_sessions() {
+    EPOCH.fetch_add(1, Ordering::SeqCst);
+}
 
 /// Любое двустороннее соединение, по которому идёт Noise: TCP в локальной сети
 /// или поток iroh через интернет.
@@ -86,6 +94,7 @@ pub struct Secure {
     pub remote_static: Vec<u8>,
     /// 6 цифр, одинаковые на обоих устройствах.
     pub code: String,
+    epoch: u64,
 }
 
 fn builder_with<'a>(p: NoiseParams, keys: &'a Keys, psk: &'a Option<[u8; 32]>) -> Builder<'a> {
@@ -117,6 +126,7 @@ fn finish(stream: Box<dyn Transport>, hs: HandshakeState) -> Result<Secure> {
         transport,
         remote_static,
         code,
+        epoch: EPOCH.load(Ordering::SeqCst),
     })
 }
 
@@ -196,7 +206,15 @@ impl Secure {
     }
 
     /// Отправляет сообщение любой длины (до 256 МБ).
+    fn check_cancel(&self) -> Result<()> {
+        if self.epoch != EPOCH.load(Ordering::SeqCst) {
+            return Err(noise("синхронизация остановлена"));
+        }
+        Ok(())
+    }
+
     pub fn send(&mut self, data: &[u8]) -> Result<()> {
+        self.check_cancel()?;
         self.send_frame(&(data.len() as u64).to_be_bytes())?;
         for chunk in data.chunks(CHUNK) {
             self.send_frame(chunk)?;
@@ -205,6 +223,7 @@ impl Secure {
     }
 
     pub fn recv(&mut self) -> Result<Vec<u8>> {
+        self.check_cancel()?;
         let head = self.recv_frame()?;
         let head: [u8; 8] = head
             .try_into()

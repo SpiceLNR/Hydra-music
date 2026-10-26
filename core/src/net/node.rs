@@ -625,6 +625,8 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     // ---------- состояние для интерфейса ----------
 
     pub fn forget(&self, device_id: &str) -> Result<bool> {
+        // удаляя устройство, обрываем и идущую синхронизацию
+        super::channel::cancel_sessions();
         lock(&self.st).found.remove(device_id);
         lock(&self.family).remove(device_id)
     }

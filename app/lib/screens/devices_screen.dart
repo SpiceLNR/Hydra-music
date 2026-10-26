@@ -90,13 +90,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
+        actions: [
+          IconButton(
           tooltip: 'Журнал',
           icon: const Icon(Icons.receipt_long),
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const JournalScreen()),
           ),
-        ),
+          ),
+        ],
         title: const Text('устройства'),
       ),
       body: ListenableBuilder(
