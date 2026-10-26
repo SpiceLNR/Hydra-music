@@ -1,0 +1,21 @@
+Hydra Music
+Required Notice: Copyright (c) 2026 SpiceLNR
+
+Licensed under the PolyForm Noncommercial License 1.0.0.
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+The full text of the license is available at:
+https://polyformproject.org/licenses/noncommercial/1.0.0
+
+In short (this summary is not the license; the license text above governs):
+- You may use, copy, modify and share Hydra Music for any noncommercial purpose,
+  including personal use, study and hobby projects.
+- You may make your own versions (forks), including ones whose source you do not
+  publish, as long as everyone who receives a copy also receives this license
+  notice and the "Required Notice" line above.
+- You may NOT sell Hydra Music or derived works, or use them for commercial
+  purposes (paid distribution, paid features, advertising revenue, and so on).
+- The software is provided "as is", without warranty of any kind.
+
+Third-party components (the Noto Sans font under the SIL Open Font License 1.1,
+Flutter, Rust crates and others) remain under their own licenses.

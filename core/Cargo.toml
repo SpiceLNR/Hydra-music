@@ -3,7 +3,7 @@ name = "hydra_core"
 version = "0.1.0"
 edition = "2021"
 description = "Hydra Music core: journal, hybrid logical clock, storage rules"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [lib]
 name = "hydra_core"
