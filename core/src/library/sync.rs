@@ -479,6 +479,12 @@ impl Library {
             if now.deleted {
                 if self.trash_remote_deleted(&now, prior)? {
                     report.trashed += 1;
+                } else if !self.trash_dir(id).exists() {
+                    // удалённый трек, которого у нас никогда не было (или его файла уже нет):
+                    // записи в корзине без файла не нужны, иначе вся старая история
+                    // удалений чужого устройства раздувает корзину
+                    self.conn
+                        .execute("DELETE FROM trash WHERE track_id = ?1", [id])?;
                 }
                 self.set_pending(id, false)?;
                 continue;
@@ -1012,6 +1018,23 @@ mod tests {
         assert!(b.sync_needs().unwrap().is_empty());
         assert!(b.root().join("Rock").join("x.mp3").is_file());
         assert_eq!(b.scan(T0 + 8).unwrap().removed, 0);
+    }
+
+    #[test]
+    fn history_of_deleted_tracks_does_not_fill_the_trash_of_a_new_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut a = device(&tmp, "phone");
+        let mut b = device(&tmp, "pc");
+        put(&a, "Rock", "a.mp3", "aaa");
+        put(&a, "Rock", "b.mp3", "bbb");
+        a.scan(T0 + 1).unwrap();
+        let rock = a.playlists().unwrap()[0].playlist_id.clone();
+        let del = a.tracks(&rock).unwrap()[0].track_id.clone();
+        a.delete_track(&del, T0 + 2).unwrap();
+        a.purge_track(&del).unwrap();
+
+        sync_pair(&mut a, &mut b, T0 + 10);
+        assert!(b.trash_items().unwrap().is_empty());
     }
 
     #[test]
