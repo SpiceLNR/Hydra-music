@@ -75,6 +75,11 @@ pub struct MergeReport {
     pub moved: usize,
     pub trashed: usize,
     pub pending_files: usize,
+    /// Несколько имён треков, ушедших в корзину из-за чужого удаления (для журнала).
+    pub trashed_sample: Vec<String>,
+    /// Файл с таким именем уже лежит, но хэш не совпал с журналом (и сколько таких).
+    pub hash_mismatch: usize,
+    pub mismatch_sample: Vec<String>,
 }
 
 impl Library {
@@ -479,6 +484,17 @@ impl Library {
             if now.deleted {
                 if self.trash_remote_deleted(&now, prior)? {
                     report.trashed += 1;
+                    if report.trashed_sample.len() < 4 {
+                        report.trashed_sample.push(format!(
+                            "{} ({})",
+                            now.file_name,
+                            if prior.is_some() {
+                                "был у нас"
+                            } else {
+                                "новый"
+                            }
+                        ));
+                    }
                 } else if !self.trash_dir(id).exists() {
                     // удалённый трек, которого у нас никогда не было (или его файла уже нет):
                     // записи в корзине без файла не нужны, иначе вся старая история
@@ -503,6 +519,12 @@ impl Library {
                 } else {
                     true
                 };
+                if !ok {
+                    report.hash_mismatch += 1;
+                    if report.mismatch_sample.len() < 3 {
+                        report.mismatch_sample.push(now.file_name.clone());
+                    }
+                }
                 self.set_pending(id, !ok)?;
                 continue;
             }

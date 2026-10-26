@@ -156,6 +156,19 @@ pub fn run_session<H: LibHandle>(
 
     let my_needs: Vec<FileNeed> = h.with(|l| l.sync_needs())?;
     let remote_needs: Vec<FileNeed> = xchg(ch, role, &my_needs)?;
+    if !report.merge.trashed_sample.is_empty() {
+        progress(&format!(
+            "#В корзину из-за чужого удаления, например: {}",
+            report.merge.trashed_sample.join(", ")
+        ));
+    }
+    if report.merge.hash_mismatch > 0 {
+        progress(&format!(
+            "#Файл на месте, но хэш не совпал: {}, например: {}",
+            report.merge.hash_mismatch,
+            report.merge.mismatch_sample.join(", ")
+        ));
+    }
     if !my_needs.is_empty() {
         let sample: Vec<String> = my_needs
             .iter()
