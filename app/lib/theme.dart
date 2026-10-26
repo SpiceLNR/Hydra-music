@@ -15,7 +15,7 @@ class Metro {
   /// Подсветка нажатия вместо круглой «волны».
   static const press = Color(0x33FFFFFF);
 
-  static const fontFamily = 'Selawik'; // если шрифта нет, Flutter возьмёт системный
+  static const fontFamily = 'NotoSans'; // если шрифта нет, Flutter возьмёт системный
 
   static const OutlineInputBorder _frame = OutlineInputBorder(
     borderRadius: BorderRadius.zero,

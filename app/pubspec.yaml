@@ -39,13 +39,9 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
-  # Шрифт Selawik (MIT). Лежит только обычное начертание; жирное и светлое Flutter
-  # подставит из него. Добавите selawkb.ttf / selawkl.ttf - раскомментируйте строки ниже.
+  # Шрифт Noto Sans Medium (SIL Open Font License 1.1, текст лицензии: assets/fonts/OFL.txt).
+  # Лежит только одно начертание; жирное и светлое Flutter подставит из него.
   fonts:
-    - family: Selawik
+    - family: NotoSans
       fonts:
-        - asset: assets/fonts/selawk.ttf
-        # - asset: assets/fonts/selawkb.ttf
-        #   weight: 700
-        # - asset: assets/fonts/selawkl.ttf
-        #   weight: 300
+        - asset: assets/fonts/NotoSans-Medium.ttf
