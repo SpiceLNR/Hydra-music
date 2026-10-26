@@ -118,6 +118,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     }
 
     fn set_message(&self, text: &str) {
+        // строки с «#» - подробности для журнала, а не статус
+        if let Some(d) = text.strip_prefix('#') {
+            self.log(d);
+            return;
+        }
         lock(&self.st).message = text.to_string();
     }
 

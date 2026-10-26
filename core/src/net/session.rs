@@ -135,7 +135,16 @@ pub fn run_session<H: LibHandle>(
     progress("Сверяю списки");
     let my_inv = h.with(|l| l.sync_inventory())?;
     let remote_inv: Inventory = xchg(ch, role, &my_inv)?;
-    h.with(|l| l.sync_adopt(&remote_inv))?;
+    let adopted = h.with(|l| l.sync_adopt(&remote_inv))?;
+    let no_sha = |i: &Inventory| i.tracks.iter().filter(|t| t.sha256.is_empty()).count();
+    progress(&format!(
+        "#Описи: у меня {} треков (без хэша {}), у них {} (без хэша {}); совмещено id: {}",
+        my_inv.tracks.len(),
+        no_sha(&my_inv),
+        remote_inv.tracks.len(),
+        no_sha(&remote_inv),
+        adopted
+    ));
 
     progress("Обмениваюсь изменениями");
     h.with(|l| l.sync_prepare(now_ms()))?;
@@ -147,6 +156,21 @@ pub fn run_session<H: LibHandle>(
 
     let my_needs: Vec<FileNeed> = h.with(|l| l.sync_needs())?;
     let remote_needs: Vec<FileNeed> = xchg(ch, role, &my_needs)?;
+    if !my_needs.is_empty() {
+        let sample: Vec<String> = my_needs
+            .iter()
+            .take(3)
+            .map(|n| format!("{}/{}", n.playlist, n.file_name))
+            .collect();
+        progress(&format!("#Мне нужны, например: {}", sample.join(", ")));
+    }
+    progress(&format!(
+        "#Принято операций {}, в корзину {}; мне нужно файлов {}, им нужно {}",
+        report.merge.new_ops,
+        report.merge.trashed,
+        my_needs.len(),
+        remote_needs.len()
+    ));
 
     // сначала отвечающий присылает файлы инициатору, потом наоборот
     match role {
