@@ -78,10 +78,19 @@ jobs:
         run: flutter test
       # Постоянный ключ подписи: без него каждый запуск CI создаёт новый ключ,
       # и Android не даёт обновить приложение поверх прежней сборки.
+      # Ключ хранится в секрете репозитория HYDRA_KEYSTORE_B64 (base64 файла keystore),
+      # в самом репозитории его нет. Если секрета нет (например, в чужом форке),
+      # Flutter создаст временный ключ сам.
       - name: Use a fixed signing key
+        env:
+          HYDRA_KEYSTORE_B64: ${{ secrets.HYDRA_KEYSTORE_B64 }}
         run: |
-          mkdir -p ~/.android
-          cp tools/debug.keystore ~/.android/debug.keystore
+          if [ -n "$HYDRA_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$HYDRA_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          else
+            echo "Секрета HYDRA_KEYSTORE_B64 нет: ключ подписи будет временным"
+          fi
       - name: Build debug APK
         working-directory: app
         run: flutter build apk --debug
