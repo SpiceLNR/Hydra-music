@@ -177,7 +177,7 @@ Future<HydraAudioHandler?> initBackgroundPlayback(PlayerControls controls) async
     return await AudioService.init<HydraAudioHandler>(
       builder: () => HydraAudioHandler(controls),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'dev.hydra.hydra_music.playback',
+        androidNotificationChannelId: 'com.spicelnr.hydra_music.playback',
         androidNotificationChannelName: 'Воспроизведение',
         androidNotificationOngoing: true,
       ),
