@@ -57,7 +57,7 @@ jobs:
           cache: true
       - name: Generate platform folders
         working-directory: app
-        run: flutter create --platforms=android,windows --project-name hydra_music --org dev.hydra .
+        run: flutter create --platforms=android,windows --project-name hydra_music --org com.spicelnr .
       - name: Patch Android manifest
         working-directory: app
         run: python3 ../tools/patch_android_manifest.py
@@ -148,7 +148,7 @@ jobs:
         run: cargo build --release
       - name: Generate Windows folder
         working-directory: app
-        run: flutter create --platforms=windows --project-name hydra_music --org dev.hydra .
+        run: flutter create --platforms=windows --project-name hydra_music --org com.spicelnr .
       - name: Patch Windows project
         working-directory: app
         shell: bash
