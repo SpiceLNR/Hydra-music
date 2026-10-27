@@ -11,3 +11,7 @@ build/
 app/android/
 app/windows/
 app/.metadata
+*.keystore
+*.jks
+identity.json
+hydra.db
