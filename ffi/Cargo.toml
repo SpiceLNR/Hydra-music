@@ -1,6 +1,6 @@
 [package]
 name = "hydra_ffi"
-version = "0.19.0"
+version = "0.19.1"
 edition = "2021"
 description = "C ABI over hydra_core: one JSON in, one JSON out"
 license = "PolyForm-Noncommercial-1.0.0"
