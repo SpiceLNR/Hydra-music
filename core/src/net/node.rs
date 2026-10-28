@@ -4,7 +4,7 @@
 //! состояние библиотеки). Входящее подключение во время чужого сеанса просто отклоняется:
 //! другое устройство повторит попытку позже.
 
-use super::channel::{handshake_initiator, handshake_responder, Secure, Transport};
+use super::channel::{handshake_initiator, handshake_responder, CancelEpoch, Secure, Transport};
 use super::identity::{Family, Identity};
 use super::session::{run_session, Hello, LibHandle, Role, SessionReport};
 use super::{hex, now_ms, unhex};
@@ -57,6 +57,8 @@ pub struct Node<H> {
     st: Mutex<Status>,
     /// Когда в последний раз пытались сообщить удалённым устройствам об удалении.
     last_goodbye: AtomicU64,
+    /// Растёт, когда нужно оборвать идущие сеансы (удаление устройства).
+    cancel: CancelEpoch,
     #[cfg(feature = "internet")]
     inet: Mutex<Option<Arc<super::inet::Inet>>>,
 }
@@ -107,6 +109,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             session: Mutex::new(()),
             st: Mutex::new(Status::default()),
             last_goodbye: AtomicU64::new(0),
+            cancel: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "internet")]
             inet: Mutex::new(None),
         })
@@ -213,6 +216,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     match handshake_initiator(s, &self.ident.keys, psk) {
                         Ok(mut ch) => {
                             ch.set_timeout(20);
+                            ch.bind_cancel(&self.cancel);
                             return Ok((ch, a));
                         }
                         Err(e) => notes.push(explain(e, &via_text(&a)).to_string()),
@@ -225,7 +229,10 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             self.log("Подключаюсь через интернет");
             match self.connect_inet(endpoint) {
                 Ok(s) => match handshake_initiator(s, &self.ident.keys, psk) {
-                    Ok(ch) => return Ok((ch, String::new())),
+                    Ok(mut ch) => {
+                        ch.bind_cancel(&self.cancel);
+                        return Ok((ch, String::new()));
+                    }
                     Err(e) => notes.push(explain(e, &via_text("")).to_string()),
                 },
                 Err(e) => notes.push(format!("через интернет: {e}")),
@@ -401,6 +408,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     fn incoming_session(&self, stream: Box<dyn Transport>, ip: &str) -> Result<SessionReport> {
         let (mut ch, pairing) = handshake_responder(stream, &self.ident.keys, self.current_psk())?;
+        ch.bind_cancel(&self.cancel);
         let key = ch.remote_static.clone();
         let known = lock(&self.family).by_key(&key).cloned();
         if !pairing && known.is_none() {
@@ -670,7 +678,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     /// Если устройство сейчас недоступно, сообщение уйдёт, как только оно появится.
     pub fn forget(self: &Arc<Self>, device_id: &str) -> Result<bool> {
         // удаляя устройство, обрываем и идущую синхронизацию
-        super::channel::cancel_sessions();
+        self.cancel.fetch_add(1, Ordering::SeqCst);
         let found = lock(&self.st).found.remove(device_id);
         let peer = lock(&self.family).by_id(device_id).cloned();
         let removed = lock(&self.family).remove(device_id)?;

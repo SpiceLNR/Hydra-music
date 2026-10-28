@@ -10,13 +10,10 @@ use snow::{params::NoiseParams, Builder, HandshakeState, TransportState};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-/// Номер «эпохи» сеансов: после `cancel_sessions` все идущие сеансы обрываются.
-static EPOCH: AtomicU64 = AtomicU64::new(0);
-
-pub fn cancel_sessions() {
-    EPOCH.fetch_add(1, Ordering::SeqCst);
-}
+/// Счётчик «эпохи» сеансов одного узла: когда он растёт, идущие сеансы этого узла обрываются.
+pub type CancelEpoch = Arc<AtomicU64>;
 
 /// Любое двустороннее соединение, по которому идёт Noise: TCP в локальной сети
 /// или поток iroh через интернет.
@@ -95,6 +92,7 @@ pub struct Secure {
     /// 6 цифр, одинаковые на обоих устройствах.
     pub code: String,
     epoch: u64,
+    cancel: CancelEpoch,
 }
 
 fn builder_with<'a>(p: NoiseParams, keys: &'a Keys, psk: &'a Option<[u8; 32]>) -> Builder<'a> {
@@ -126,7 +124,8 @@ fn finish(stream: Box<dyn Transport>, hs: HandshakeState) -> Result<Secure> {
         transport,
         remote_static,
         code,
-        epoch: EPOCH.load(Ordering::SeqCst),
+        epoch: 0,
+        cancel: Arc::new(AtomicU64::new(0)),
     })
 }
 
@@ -206,8 +205,14 @@ impl Secure {
     }
 
     /// Отправляет сообщение любой длины (до 256 МБ).
+    /// Привязывает сеанс к узлу: его `cancel` обрывает этот сеанс при следующей передаче данных.
+    pub fn bind_cancel(&mut self, cancel: &CancelEpoch) {
+        self.epoch = cancel.load(Ordering::SeqCst);
+        self.cancel = Arc::clone(cancel);
+    }
+
     fn check_cancel(&self) -> Result<()> {
-        if self.epoch != EPOCH.load(Ordering::SeqCst) {
+        if self.epoch != self.cancel.load(Ordering::SeqCst) {
             return Err(noise("синхронизация остановлена"));
         }
         Ok(())
