@@ -112,6 +112,7 @@ class DeviceInfo {
     required this.online,
     required this.lastSyncMs,
     this.internet = false,
+    this.originalName = '',
   });
 
   factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
@@ -120,12 +121,16 @@ class DeviceInfo {
         online: j['online'] as bool,
         lastSyncMs: (j['last_sync_ms'] as num).toInt(),
         internet: (j['internet'] as bool?) ?? false,
+        originalName: (j['original_name'] as String?) ?? '',
       );
 
   final String id;
   final String name;
   final bool online;
   final int lastSyncMs;
+
+  /// Имя, которое устройство сообщает о себе (`name` может быть заменено своим).
+  final String originalName;
 
   /// Известен адрес для связи через интернет.
   final bool internet;

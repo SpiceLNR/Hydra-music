@@ -68,6 +68,9 @@ pub struct Peer {
     /// Адрес для связи через интернет (id iroh); известен после первой синхронизации.
     #[serde(default)]
     pub endpoint: String,
+    /// Имя, которое пользователь дал устройству у себя. Не затирается именем от самого устройства.
+    #[serde(default)]
+    pub alias: String,
 }
 
 /// Доверенные устройства. Хранятся в `family.json`.
@@ -119,9 +122,24 @@ impl Family {
                 last_sync_ms: 0,
                 last_addr: addr.to_string(),
                 endpoint: String::new(),
+                alias: String::new(),
             });
         }
         self.save()
+    }
+
+    /// Своё имя для устройства; пустая строка возвращает имя, которое оно сообщает само.
+    /// Возвращает `false`, если такого устройства нет.
+    pub fn set_alias(&mut self, device_id: &str, alias: &str) -> Result<bool> {
+        let alias: String = alias.trim().chars().take(40).collect();
+        match self.peers.iter_mut().find(|p| p.device_id == device_id) {
+            Some(p) => {
+                p.alias = alias;
+                self.save()?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     /// Запоминает адрес устройства для связи через интернет.
@@ -150,5 +168,29 @@ impl Family {
         self.peers.retain(|p| p.device_id != device_id);
         self.save()?;
         Ok(self.peers.len() != before)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alias_survives_renames_by_the_device_and_restarts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = Family::load(tmp.path());
+        f.upsert("d1", "LAPTOP-1", &[1, 2, 3], "").unwrap();
+        assert!(f.set_alias("d1", "  Ноутбук  ").unwrap());
+        assert!(!f.set_alias("nope", "x").unwrap());
+        // само устройство сообщило другое имя: своё мы не теряем
+        f.upsert("d1", "LAPTOP-2", &[1, 2, 3], "").unwrap();
+        let f = Family::load(tmp.path());
+        let p = f.by_id("d1").unwrap();
+        assert_eq!(p.alias, "Ноутбук");
+        assert_eq!(p.name, "LAPTOP-2");
+        // пустое имя возвращает исходное
+        let mut f = f;
+        f.set_alias("d1", "").unwrap();
+        assert!(f.by_id("d1").unwrap().alias.is_empty());
     }
 }

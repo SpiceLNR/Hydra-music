@@ -43,6 +43,44 @@ class _DevicesScreenState extends State<DevicesScreen> {
     if (ok) await hydraNet.forget(d);
   }
 
+  Future<void> _rename(DeviceInfo d) async {
+    final controller = TextEditingController(text: d.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Название устройства'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              maxLength: 40,
+              decoration: const InputDecoration(hintText: 'Например, «Ноутбук»'),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+            if (d.originalName.isNotEmpty)
+              Text(
+                'Само устройство называет себя «${d.originalName}». '
+                'Новое имя видно только здесь; пустое поле вернёт исходное.',
+                style: const TextStyle(fontSize: 13, color: Metro.textDim),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name != null) await hydraNet.rename(d, name);
+  }
+
   Future<void> _add() async {
     final isMobile = Platform.isAndroid || Platform.isIOS;
     final choice = await showDialog<String>(
@@ -124,6 +162,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   busy: hydraNet.busy,
                   onSync: () => hydraNet.sync(d),
                   onRevoke: () => _revoke(d),
+                  onRename: () => _rename(d),
                 ),
                 const SizedBox(height: 8),
               ],
@@ -191,12 +230,14 @@ class _DeviceCard extends StatelessWidget {
     required this.busy,
     required this.onSync,
     required this.onRevoke,
+    required this.onRename,
   });
 
   final DeviceInfo device;
   final bool busy;
   final VoidCallback onSync;
   final VoidCallback onRevoke;
+  final VoidCallback onRename;
 
   @override
   Widget build(BuildContext context) {
@@ -212,6 +253,11 @@ class _DeviceCard extends StatelessWidget {
               Container(width: 12, height: 12, color: d.online ? Metro.green : Colors.grey),
               const SizedBox(width: 12),
               Expanded(child: Text(d.name, style: const TextStyle(fontSize: 20))),
+              IconButton(
+                tooltip: 'Переименовать',
+                icon: const Icon(Icons.edit, size: 20),
+                onPressed: onRename,
+              ),
             ],
           ),
           const SizedBox(height: 4),

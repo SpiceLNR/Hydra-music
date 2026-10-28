@@ -636,6 +636,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         lock(&self.family).remove(device_id)
     }
 
+    /// Переименовывает устройство только у нас (пустое имя возвращает исходное).
+    pub fn rename_peer(&self, device_id: &str, name: &str) -> Result<bool> {
+        lock(&self.family).set_alias(device_id, name)
+    }
+
     pub fn family_json(&self) -> Value {
         let found = lock(&self.st).found.clone();
         let now = now_ms();
@@ -649,7 +654,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     .unwrap_or(false);
                 json!({
                     "device_id": p.device_id,
-                    "name": p.name,
+                    "name": if p.alias.is_empty() { &p.name } else { &p.alias },
+                    "original_name": p.name,
+                    "alias": p.alias,
                     "last_sync_ms": p.last_sync_ms,
                     "online": online,
                     "internet": !p.endpoint.is_empty(),

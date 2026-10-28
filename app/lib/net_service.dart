@@ -530,6 +530,16 @@ class NetService extends ChangeNotifier {
     unawaited(_poll());
   }
 
+  /// Своё имя для устройства (пустое возвращает исходное). Видно только на этом устройстве.
+  Future<void> rename(DeviceInfo d, String name) async {
+    try {
+      await Core.call('net_rename', {'device_id': d.id, 'name': name});
+    } on CoreException catch (e) {
+      error = e.message;
+    }
+    await _poll();
+  }
+
   Future<void> forget(DeviceInfo d) async {
     try {
       await Core.call('net_forget', {'device_id': d.id});

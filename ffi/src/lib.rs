@@ -350,6 +350,9 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "net_forget" => to_json(n.forget(&arg_str(args, "device_id")?)),
+        "net_rename" => {
+            to_json(n.rename_peer(&arg_str(args, "device_id")?, &arg_str(args, "name")?))
+        }
         other => Err(format!("unknown method: {other}")),
     }
 }
