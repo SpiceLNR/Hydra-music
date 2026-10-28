@@ -12,6 +12,7 @@ use crate::{Error, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -54,6 +55,8 @@ pub struct Node<H> {
     offer: Mutex<Option<Offer>>,
     session: Mutex<()>,
     st: Mutex<Status>,
+    /// Когда в последний раз пытались сообщить удалённым устройствам об удалении.
+    last_goodbye: AtomicU64,
     #[cfg(feature = "internet")]
     inet: Mutex<Option<Arc<super::inet::Inet>>>,
 }
@@ -103,6 +106,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             offer: Mutex::new(None),
             session: Mutex::new(()),
             st: Mutex::new(Status::default()),
+            last_goodbye: AtomicU64::new(0),
             #[cfg(feature = "internet")]
             inet: Mutex::new(None),
         })
@@ -261,6 +265,12 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             }
         });
         self.start_discovery(port);
+        // сообщения об удалении, которые не дошли (устройство было далеко): повтор через интернет
+        let me = Arc::clone(self);
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(300));
+            me.send_goodbyes();
+        });
         Ok(port)
     }
 
@@ -304,11 +314,21 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     continue;
                 };
                 // запоминаем только своих: чужие устройства нас не интересуют
-                if lock(&me.family).by_id(parts[1]).is_some() {
+                let (member, waiting) = {
+                    let fam = lock(&me.family);
+                    (
+                        fam.by_id(parts[1]).is_some(),
+                        fam.goodbyes.iter().any(|g| g.device_id == parts[1]),
+                    )
+                };
+                if member || waiting {
                     let addr = format!("{}:{}", src.ip(), p);
                     lock(&me.st)
                         .found
                         .insert(parts[1].to_string(), (addr, now_ms()));
+                }
+                if waiting {
+                    me.send_goodbyes();
                 }
             }
         });
@@ -434,6 +454,18 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             lock(&self.st).family_generation += 1;
             self.log(&format!("Добавлено устройство «{}»", hello.name));
             Ok(())
+        } else if expected_id == Some(hello.device_id.as_str()) && hello.goodbye {
+            // собеседник убрал нас из своего списка: убираем и его
+            let name = lock(&self.family)
+                .by_id(&hello.device_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| hello.name.clone());
+            lock(&self.family).remove(&hello.device_id)?;
+            lock(&self.st).family_generation += 1;
+            self.log(&format!(
+                "«{name}» удалило это устройство из своего списка: оно убрано и у нас"
+            ));
+            Ok(())
         } else if expected_id == Some(hello.device_id.as_str()) {
             // обновляем последний известный адрес (он мог смениться)
             lock(&self.family).upsert(&hello.device_id, &hello.name, key, addr)?;
@@ -505,6 +537,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     fn finish(&self, res: Result<SessionReport>, incoming: bool) {
         match res {
+            Ok(rep) if rep.goodbye => {
+                let mut st = lock(&self.st);
+                st.busy = false;
+                st.message.clear();
+            }
             Ok(rep) => {
                 let _ = lock(&self.family).touch(&rep.peer_device_id, "");
                 let mut st = lock(&self.st);
@@ -629,11 +666,103 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     // ---------- состояние для интерфейса ----------
 
-    pub fn forget(&self, device_id: &str) -> Result<bool> {
+    /// Убирает устройство из семьи и сообщает ему об этом, чтобы оно убрало и нас.
+    /// Если устройство сейчас недоступно, сообщение уйдёт, как только оно появится.
+    pub fn forget(self: &Arc<Self>, device_id: &str) -> Result<bool> {
         // удаляя устройство, обрываем и идущую синхронизацию
         super::channel::cancel_sessions();
-        lock(&self.st).found.remove(device_id);
-        lock(&self.family).remove(device_id)
+        let found = lock(&self.st).found.remove(device_id);
+        let peer = lock(&self.family).by_id(device_id).cloned();
+        let removed = lock(&self.family).remove(device_id)?;
+        if let Some(mut p) = peer {
+            if let Some((addr, _)) = found {
+                p.last_addr = addr;
+            }
+            lock(&self.family).queue_goodbye(p)?;
+            self.last_goodbye.store(0, Ordering::SeqCst);
+            self.send_goodbyes();
+        }
+        Ok(removed)
+    }
+
+    /// Сообщает удалённым устройствам, что мы их убрали (в фоне). Пока устройство не
+    /// отозвалось, сообщение хранится до 14 дней.
+    pub fn send_goodbyes(self: &Arc<Self>) {
+        const MAX_AGE_MS: u64 = 14 * 24 * 3600 * 1000;
+        {
+            let mut fam = lock(&self.family);
+            let _ = fam.expire_goodbyes(MAX_AGE_MS);
+            if fam.goodbyes.is_empty() {
+                return;
+            }
+        }
+        // не чаще раза в 20 секунд, чтобы не стучаться на каждый сигнал поиска
+        let now = now_ms();
+        let last = self.last_goodbye.swap(now, Ordering::SeqCst);
+        if now.saturating_sub(last) < 20_000 {
+            return;
+        }
+        let me = Arc::clone(self);
+        thread::spawn(move || {
+            let pending = lock(&me.family).goodbyes.clone();
+            for peer in pending {
+                // только что оборванный сеанс освобождает замок не мгновенно
+                let mut guard = me.try_session();
+                for _ in 0..10 {
+                    if guard.is_some() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(300));
+                    guard = me.try_session();
+                }
+                let Some(_guard) = guard else {
+                    return; // занято: попробуем позже
+                };
+                let found = lock(&me.st).found.get(&peer.device_id).cloned();
+                let mut addrs = Vec::new();
+                if let Some((a, seen)) = found {
+                    if now_ms().saturating_sub(seen) < ONLINE_MS * 3 {
+                        addrs.push(a);
+                    }
+                }
+                if !peer.last_addr.is_empty() && !addrs.contains(&peer.last_addr) {
+                    addrs.push(peer.last_addr.clone());
+                }
+                let res =
+                    me.dial_secure(&addrs, &peer.endpoint, true, None)
+                        .and_then(|(mut ch, _)| {
+                            if hex(&ch.remote_static) != peer.public_key {
+                                return Err(bad("ключ устройства изменился"));
+                            }
+                            let id = peer.device_id.clone();
+                            let verify = |h: &Hello| {
+                                if h.device_id == id {
+                                    Ok(())
+                                } else {
+                                    Err(bad("устройство представилось чужим именем"))
+                                }
+                            };
+                            run_session(
+                                &mut ch,
+                                &*me.handle,
+                                Role::Initiator,
+                                &me.hello().with_goodbye(),
+                                &verify,
+                                &|_| {},
+                            )
+                        });
+                match res {
+                    Ok(_) => {
+                        let _ = lock(&me.family).done_goodbye(&peer.device_id);
+                        me.log(&format!("«{}» уведомлено об удалении", peer.name));
+                    }
+                    Err(e) => me.log(&format!(
+                        "«{}» пока не уведомлено об удалении: {e}",
+                        peer.name
+                    )),
+                }
+            }
+        });
     }
 
     /// Переименовывает устройство только у нас (пустое имя возвращает исходное).
@@ -798,5 +927,44 @@ mod tests {
 
         // посторонний без пары синхронизироваться не может
         assert!(c.sync_peer(&a_id).is_err());
+    }
+
+    #[test]
+    fn forgetting_a_device_removes_us_from_its_list_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, _lib_a) = make(tmp.path(), "phone");
+        let (b, _lib_b) = make(tmp.path(), "pc");
+        let port = a.start().unwrap();
+        b.start().unwrap();
+        let offer = a.pair_offer();
+        let before = generation(&b);
+        b.pair_with(
+            vec![format!("127.0.0.1:{port}")],
+            offer["public_key"].as_str().unwrap(),
+            offer["secret"].as_str().unwrap(),
+        )
+        .unwrap();
+        wait_done(&b, before);
+        assert_eq!(a.family_json().as_array().unwrap().len(), 1);
+        wait_idle(&a);
+        wait_idle(&b);
+
+        let a_id = a.status_json()["device_id"].as_str().unwrap().to_string();
+        assert!(b.forget(&a_id).unwrap());
+        assert!(b.family_json().as_array().unwrap().is_empty());
+        // телефон узнаёт об удалении и убирает ПК у себя
+        let mut gone = false;
+        for _ in 0..100 {
+            if a.family_json().as_array().unwrap().is_empty() {
+                gone = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(gone, "второе устройство осталось в списке");
+        assert!(
+            lock(&b.family).goodbyes.is_empty(),
+            "сообщение об удалении не снято с очереди"
+        );
     }
 }

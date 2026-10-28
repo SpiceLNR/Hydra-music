@@ -48,6 +48,9 @@ pub struct Hello {
     /// Адрес этого устройства для связи через интернет (id iroh); пусто, если не включено.
     #[serde(default)]
     pub endpoint: String,
+    /// «Я убрал вас из своего списка»: собеседник тоже убирает это устройство и сеанс на этом заканчивается.
+    #[serde(default)]
+    pub goodbye: bool,
 }
 
 impl Hello {
@@ -58,7 +61,13 @@ impl Hello {
             name: name.to_string(),
             port,
             endpoint: String::new(),
+            goodbye: false,
         }
+    }
+
+    pub fn with_goodbye(mut self) -> Hello {
+        self.goodbye = true;
+        self
     }
 
     pub fn with_endpoint(mut self, endpoint: String) -> Hello {
@@ -69,6 +78,8 @@ impl Hello {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SessionReport {
+    /// Сеанс был только прощанием: удаление устройства, ничего не синхронизировалось.
+    pub goodbye: bool,
     pub peer_device_id: String,
     pub peer_name: String,
     pub merge: MergeReport,
@@ -131,6 +142,10 @@ pub fn run_session<H: LibHandle>(
         peer_name: remote.name.clone(),
         ..SessionReport::default()
     };
+    if me.goodbye || remote.goodbye {
+        report.goodbye = true;
+        return Ok(report);
+    }
 
     progress("Сверяю списки");
     let my_inv = h.with(|l| l.sync_inventory())?;

@@ -76,7 +76,10 @@ pub struct Peer {
 /// Доверенные устройства. Хранятся в `family.json`.
 pub struct Family {
     path: PathBuf,
+    goodbye_path: PathBuf,
     pub peers: Vec<Peer>,
+    /// Устройства, которые мы удалили, но ещё не сообщили им об этом (хранятся в `goodbye.json`).
+    pub goodbyes: Vec<Peer>,
 }
 
 impl Family {
@@ -86,7 +89,48 @@ impl Family {
             .ok()
             .and_then(|t| serde_json::from_str::<Vec<Peer>>(&t).ok())
             .unwrap_or_default();
-        Family { path, peers }
+        let goodbye_path = dir.join("goodbye.json");
+        let goodbyes = fs::read_to_string(&goodbye_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Vec<Peer>>(&t).ok())
+            .unwrap_or_default();
+        Family {
+            path,
+            goodbye_path,
+            peers,
+            goodbyes,
+        }
+    }
+
+    fn save_goodbyes(&self) -> Result<()> {
+        let tmp = self.goodbye_path.with_extension("json.tmp");
+        fs::write(&tmp, serde_json::to_vec_pretty(&self.goodbyes)?)?;
+        fs::rename(&tmp, &self.goodbye_path).map_err(Error::from)
+    }
+
+    /// Запоминает, что устройству надо сообщить об удалении (`added_ms` = когда удалили).
+    pub fn queue_goodbye(&mut self, mut peer: Peer) -> Result<()> {
+        peer.added_ms = now_ms();
+        self.goodbyes.retain(|p| p.device_id != peer.device_id);
+        self.goodbyes.push(peer);
+        self.save_goodbyes()
+    }
+
+    pub fn done_goodbye(&mut self, device_id: &str) -> Result<()> {
+        self.goodbyes.retain(|p| p.device_id != device_id);
+        self.save_goodbyes()
+    }
+
+    /// Убирает записи старше `max_age_ms` (устройство так и не появилось).
+    pub fn expire_goodbyes(&mut self, max_age_ms: u64) -> Result<()> {
+        let now = now_ms();
+        let before = self.goodbyes.len();
+        self.goodbyes
+            .retain(|p| now.saturating_sub(p.added_ms) < max_age_ms);
+        if self.goodbyes.len() != before {
+            self.save_goodbyes()?;
+        }
+        Ok(())
     }
 
     fn save(&self) -> Result<()> {
