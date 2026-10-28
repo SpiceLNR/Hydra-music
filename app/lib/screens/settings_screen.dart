@@ -210,12 +210,12 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             },
           ),
           ListTile(
-            title: const Text('Сборка'),
-            subtitle: Text(kBuild),
+            title: const Text('Версия'),
+            subtitle: Text('$kVersion (сборка $kBuild)'),
           ),
           const ListTile(
             title: Text('О приложении'),
-            subtitle: Text('Hydra Music 0.1.0 · открытый исходный код'),
+            subtitle: Text('Hydra Music · SpiceLNR · PolyForm Noncommercial'),
           ),
         ],
       ),
