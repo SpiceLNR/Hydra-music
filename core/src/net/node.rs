@@ -433,14 +433,16 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 &addr,
             )
         };
-        run_session(
+        let mut rep = run_session(
             &mut ch,
             &*self.handle,
             Role::Responder,
             &self.hello(),
             &verify,
             &|m| self.set_message(m),
-        )
+        )?;
+        rep.via_internet = ip.is_empty();
+        Ok(rep)
     }
 
     /// Проверка собеседника после приветствия.
@@ -562,6 +564,22 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     "Синхронизация с «{}»: получено файлов {}, отправлено {}",
                     rep.peer_name, rep.files_received, rep.files_sent
                 ));
+                let bytes = rep.bytes_sent + rep.bytes_received;
+                if bytes > 0 && rep.elapsed_ms > 0 {
+                    let mb = bytes as f64 / 1_048_576.0;
+                    let secs = rep.elapsed_ms as f64 / 1000.0;
+                    self.log(&format!(
+                        "Передано {:.1} МБ за {:.0} с: {:.2} МБ/с ({})",
+                        mb,
+                        secs,
+                        mb / secs,
+                        if rep.via_internet {
+                            "через интернет"
+                        } else {
+                            "по локальной сети"
+                        }
+                    ));
+                }
             }
             Err(e) => {
                 let mut st = lock(&self.st);
@@ -667,6 +685,8 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 &|m| me.set_message(m),
             )?;
             let _ = lock(&me.family).touch(&id, &addr);
+            let mut rep = rep;
+            rep.via_internet = addr.is_empty();
             Ok(rep)
         });
         Ok(())

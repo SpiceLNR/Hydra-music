@@ -87,6 +87,12 @@ pub struct SessionReport {
     pub files_sent: usize,
     /// Файлы, которые не удалось получить сейчас (будут запрошены в следующий раз).
     pub files_failed: usize,
+    /// Сколько байт файлов передано и получено, сколько длился сеанс и шёл ли он через интернет
+    /// (нужно, чтобы в журнале была видна скорость).
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub elapsed_ms: u64,
+    pub via_internet: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -128,6 +134,7 @@ pub fn run_session<H: LibHandle>(
     verify: &dyn Fn(&Hello) -> Result<()>,
     progress: &dyn Fn(&str),
 ) -> Result<SessionReport> {
+    let started = std::time::Instant::now();
     ch.set_timeout(90);
     let remote: Hello = xchg(ch, role, me)?;
     if remote.proto != PROTOCOL {
@@ -211,7 +218,15 @@ pub fn run_session<H: LibHandle>(
             receive_files(ch, h, &my_needs, &mut report, progress)?;
         }
     }
+    report.elapsed_ms = started.elapsed().as_millis() as u64;
     Ok(report)
+}
+
+/// «12.3 МБ за 40 с, 0.31 МБ/с» для журнала.
+fn speed_text(bytes: u64, elapsed: std::time::Duration) -> String {
+    let mb = bytes as f64 / 1_048_576.0;
+    let secs = elapsed.as_secs_f64().max(0.001);
+    format!("{:.1} МБ за {:.0} с, {:.2} МБ/с", mb, secs, mb / secs)
 }
 
 fn send_files<H: LibHandle>(
@@ -222,6 +237,7 @@ fn send_files<H: LibHandle>(
     progress: &dyn Fn(&str),
 ) -> Result<()> {
     let total = needs.len();
+    let t0 = std::time::Instant::now();
     for (i, need) in needs.iter().enumerate() {
         let found = h.with(|l| l.sync_file_for(&need.track_id))?;
         let Some((path, sha)) = found else {
@@ -253,6 +269,15 @@ fn send_files<H: LibHandle>(
             left -= want as u64;
         }
         report.files_sent += 1;
+        report.bytes_sent += size;
+        if (i + 1) % 10 == 0 {
+            progress(&format!(
+                "#Отправлено файлов {} из {}: {}",
+                i + 1,
+                total,
+                speed_text(report.bytes_sent, t0.elapsed())
+            ));
+        }
     }
     Ok(())
 }
@@ -265,6 +290,7 @@ fn receive_files<H: LibHandle>(
     progress: &dyn Fn(&str),
 ) -> Result<()> {
     let total = needs.len();
+    let t0 = std::time::Instant::now();
     for (i, need) in needs.iter().enumerate() {
         let raw = ch.recv()?;
         let hdr: FileHeader = serde_json::from_slice(&raw)?;
@@ -293,6 +319,15 @@ fn receive_files<H: LibHandle>(
         let ok = h.with(|l| l.sync_store_file(&need.track_id, &tmp, &hdr.sha256))?;
         if ok {
             report.files_received += 1;
+            report.bytes_received += hdr.size;
+            if (i + 1) % 10 == 0 {
+                progress(&format!(
+                    "#Получено файлов {} из {}: {}",
+                    i + 1,
+                    total,
+                    speed_text(report.bytes_received, t0.elapsed())
+                ));
+            }
         } else {
             report.files_failed += 1;
         }
