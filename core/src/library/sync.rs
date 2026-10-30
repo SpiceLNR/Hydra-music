@@ -1043,6 +1043,40 @@ mod tests {
     }
 
     #[test]
+    fn compacted_journal_still_syncs_old_and_new_devices_to_the_same_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut a = device(&tmp, "phone");
+        let mut b = device(&tmp, "pc");
+        let mut c = device(&tmp, "tablet");
+        for n in ["a", "b", "c", "d"] {
+            put(&a, "Rock", &format!("{n}.mp3"), &format!("{n}-bytes"));
+        }
+        a.scan(T0 + 1).unwrap();
+        sync_pair(&mut a, &mut b, T0 + 10);
+
+        // на телефоне много перестановок и переименований
+        let rock = a.playlists().unwrap()[0].playlist_id.clone();
+        for i in 0..12u64 {
+            let tracks = a.tracks(&rock).unwrap();
+            let id = tracks[(i % 4) as usize].track_id.clone();
+            a.reorder(&id, ((i + 1) % 4) as usize, T0 + 20 + i).unwrap();
+        }
+        a.rename_playlist(&rock, "Rock 1").unwrap();
+        a.rename_playlist(&rock, "Rock 2").unwrap();
+        let before = a.sync_vector().unwrap();
+        let removed = a.compact_journal(T0 + 100, true).unwrap();
+        assert!(removed > 0, "сжатие ничего не убрало");
+        assert_eq!(a.sync_vector().unwrap(), before, "сжатие сдвинуло вектор");
+
+        // старое устройство, уже знавшее часть истории, и новое, не знавшее ничего
+        sync_pair(&mut a, &mut b, T0 + 200);
+        sync_pair(&mut a, &mut c, T0 + 210);
+        assert_eq!(names(&b, "Rock 2"), names(&a, "Rock 2"));
+        assert_eq!(names(&c, "Rock 2"), names(&a, "Rock 2"));
+        assert_eq!(playlist_names(&c), playlist_names(&a));
+    }
+
+    #[test]
     fn history_of_deleted_tracks_does_not_fill_the_trash_of_a_new_device() {
         let tmp = tempfile::tempdir().unwrap();
         let mut a = device(&tmp, "phone");

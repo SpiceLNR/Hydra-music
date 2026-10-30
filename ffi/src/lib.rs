@@ -148,7 +148,14 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> Result<T, String>) -> Result<T, S
 
 fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
     match method {
-        "scan" => to_json(st.lib.scan(now_ms())),
+        "scan" => {
+            let report = st.lib.scan(now_ms());
+            if report.is_ok() {
+                // раз в сутки убираем из журнала перекрытые операции; сбой не мешает работе
+                let _ = st.lib.compact_journal(now_ms(), false);
+            }
+            to_json(report)
+        }
         "playlists" => to_json(st.lib.playlists()),
         "held_deletions" => to_json(Ok::<_, hydra_core::Error>(st.lib.held_deletions().to_vec())),
         "resolve_held" => {

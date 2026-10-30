@@ -474,6 +474,170 @@ pub fn add_payload(
     })
 }
 
+// ---------- сжатие журнала ----------
+
+/// Какие поля трека меняет операция и влияет ли она на признак «удалён».
+/// `None` для `Add`: его не трогаем никогда.
+fn op_effect(kind: Kind, payload: &Value) -> Option<(Vec<&'static str>, bool)> {
+    let has = |k: &str| str_field(payload, k).is_some();
+    Some(match kind {
+        Kind::Add => return None,
+        Kind::Reorder => (
+            if has("order_key") {
+                vec!["order_key"]
+            } else {
+                vec![]
+            },
+            false,
+        ),
+        Kind::Edit => {
+            let mut f = Vec::new();
+            for k in ["title", "artist", "sha256"] {
+                if has(k) {
+                    f.push(k);
+                }
+            }
+            (f, true)
+        }
+        Kind::Move => {
+            if has("to_playlist_id") {
+                let mut f = vec!["playlist_id"];
+                for k in ["file_name", "order_key"] {
+                    if has(k) {
+                        f.push(k);
+                    }
+                }
+                (f, true)
+            } else {
+                (vec![], false) // без цели перемещение ничего не меняет
+            }
+        }
+        Kind::Delete => (vec![], true),
+    })
+}
+
+/// Выбрасывает операции, которые ни на что не влияют: их результат целиком перекрыт более
+/// поздними операциями того же трека (перестановки, правки, перемещения). Итоговое состояние
+/// от этого не меняется ни здесь, ни у устройств, которые получат журнал позже. Самая
+/// новая операция каждого устройства остаётся: по ней собеседники понимают, что мы уже получили.
+/// Возвращает (операций треков, операций плейлистов) удалено.
+pub fn compact(conn: &Connection) -> Result<(usize, usize)> {
+    use std::collections::HashSet;
+    let tx = conn.unchecked_transaction()?;
+
+    // ----- операции треков -----
+    let protected: HashSet<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT op_id FROM ops o WHERE hlc = (SELECT MAX(hlc) FROM ops WHERE device_id = o.device_id)",
+        )?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        rows
+    };
+    let rows: Vec<(String, String, String, String)> = {
+        let mut stmt = tx.prepare(
+            "SELECT op_id, track_id, kind, payload FROM ops ORDER BY track_id ASC, hlc DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        rows
+    };
+    let mut drop_ids: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut seen_deleted = false;
+    for (op_id, track_id, kind, payload) in &rows {
+        if *track_id != current {
+            current = track_id.clone();
+            seen.clear();
+            seen_deleted = false;
+        }
+        let Some(kind) = Kind::parse(kind) else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let Some((fields, affects)) = op_effect(kind, &payload) else {
+            continue;
+        };
+        let covered = fields.iter().all(|f| seen.contains(f)) && (!affects || seen_deleted);
+        if covered && !protected.contains(op_id) {
+            drop_ids.push(op_id.clone());
+            continue; // его поля уже перекрыты, вклада в «увиденное» нет
+        }
+        seen.extend(fields);
+        seen_deleted |= affects;
+    }
+    for id in &drop_ids {
+        tx.execute("DELETE FROM ops WHERE op_id = ?1", [id])?;
+    }
+
+    // ----- операции плейлистов -----
+    let pl_protected: HashSet<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT op_id FROM pl_ops o WHERE hlc = (SELECT MAX(hlc) FROM pl_ops WHERE device_id = o.device_id)",
+        )?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        rows
+    };
+    let pl_rows: Vec<(String, String, String)> = {
+        let mut stmt = tx.prepare(
+            "SELECT op_id, playlist_id, payload FROM pl_ops ORDER BY playlist_id ASC, hlc DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        rows
+    };
+    let mut pl_drop: Vec<String> = Vec::new();
+    let mut cur_pl: Option<String> = None;
+    let mut pl_seen: HashSet<&'static str> = HashSet::new();
+    for (op_id, playlist_id, payload) in &pl_rows {
+        if cur_pl.as_deref() != Some(playlist_id.as_str()) {
+            cur_pl = Some(playlist_id.clone());
+            pl_seen.clear();
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let mut fields: Vec<&'static str> = Vec::new();
+        if playlist_id.is_empty() {
+            // порядок всего списка: значима только самая новая запись
+            if v.get("order").is_some() {
+                fields.push("order");
+            }
+        } else {
+            if v.get("name").and_then(Value::as_str).is_some() {
+                fields.push("name");
+            }
+            if v.get("deleted").and_then(Value::as_bool).is_some() {
+                fields.push("deleted");
+            }
+            if matches!(
+                v.get("sort").and_then(Value::as_str),
+                Some("manual" | "artist" | "title")
+            ) {
+                fields.push("sort");
+            }
+        }
+        if fields.iter().all(|f| pl_seen.contains(f)) && !pl_protected.contains(op_id) {
+            pl_drop.push(op_id.clone());
+            continue;
+        }
+        pl_seen.extend(fields);
+    }
+    for id in &pl_drop {
+        tx.execute("DELETE FROM pl_ops WHERE op_id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok((drop_ids.len(), pl_drop.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,5 +1081,98 @@ mod tests {
         let v: Value = serde_json::from_str(&manifest_json(&conn, "rock").unwrap()).unwrap();
         assert_eq!(v["order"], json!(["b", "a"]));
         assert_eq!(v["playlist_id"], "rock");
+    }
+
+    #[test]
+    fn compaction_keeps_the_final_state_of_random_histories() {
+        let mut seed: u64 = 12345;
+        let mut rnd = |n: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) % n
+        };
+        let mut removed_total = 0;
+        for _ in 0..200 {
+            let conn = open_in_memory().unwrap();
+            let mut ca = Clock::new("A");
+            let mut cb = Clock::new("B");
+            add(&conn, &mut ca, "A", 1000, "t1", "rock");
+            let steps = 5 + rnd(30);
+            let mut now = 2000;
+            for _ in 0..steps {
+                now += 10;
+                let on_a = rnd(2) == 0;
+                let (kind, payload) = match rnd(7) {
+                    0 | 1 => (
+                        Kind::Reorder,
+                        json!({ "order_key": format!("k{}", rnd(5)) }),
+                    ),
+                    2 => (Kind::Edit, json!({ "title": format!("T{}", rnd(3)) })),
+                    3 => (
+                        Kind::Edit,
+                        json!({ "artist": if rnd(2) == 0 { "" } else { "Art" } }),
+                    ),
+                    4 => {
+                        let mut p = json!({ "to_playlist_id": format!("p{}", rnd(3)) });
+                        if rnd(2) == 0 {
+                            p["file_name"] = json!(format!("f{}.mp3", rnd(3)));
+                        }
+                        if rnd(2) == 0 {
+                            p["order_key"] = json!(format!("k{}", rnd(5)));
+                        }
+                        (Kind::Move, p)
+                    }
+                    5 => (Kind::Delete, json!({})),
+                    _ => (Kind::Move, json!({})),
+                };
+                let (clock, dev) = if on_a { (&mut ca, "A") } else { (&mut cb, "B") };
+                record_local(&conn, clock, now, dev, kind, "t1", payload).unwrap();
+            }
+            let before = get_track(&conn, "t1").unwrap().unwrap();
+            let (removed, _) = compact(&conn).unwrap();
+            removed_total += removed;
+            rebuild_track(&conn, "t1", now, "user").unwrap();
+            let after = get_track(&conn, "t1").unwrap().unwrap();
+            assert_eq!(before, after, "состояние изменилось после сжатия");
+        }
+        assert!(removed_total > 0, "сжатие ни разу ничего не убрало");
+    }
+
+    #[test]
+    fn compaction_keeps_the_newest_op_of_every_device() {
+        let conn = open_in_memory().unwrap();
+        let mut ca = Clock::new("A");
+        add(&conn, &mut ca, "A", 1000, "t1", "rock");
+        for i in 0..5 {
+            record_local(
+                &conn,
+                &mut ca,
+                2000 + i,
+                "A",
+                Kind::Reorder,
+                "t1",
+                json!({ "order_key": format!("k{i}") }),
+            )
+            .unwrap();
+        }
+        let newest: String = conn
+            .query_row("SELECT op_id FROM ops ORDER BY hlc DESC LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        compact(&conn).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ops", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 2, "остаются Add и последняя перестановка");
+        let still: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ops WHERE op_id = ?1",
+                [&newest],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 1);
     }
 }

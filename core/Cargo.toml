@@ -1,6 +1,6 @@
 [package]
 name = "hydra_core"
-version = "0.21.2"
+version = "0.22.0"
 edition = "2021"
 description = "Hydra Music core: journal, hybrid logical clock, storage rules"
 license = "PolyForm-Noncommercial-1.0.0"

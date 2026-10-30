@@ -572,6 +572,40 @@ impl Library {
         journal::forget_trashed(&self.conn, track_id)
     }
 
+    /// Сжимает журнал: выбрасывает операции, полностью перекрытые более поздними (см.
+    /// `journal::compact`). Без `force` работает не чаще раза в сутки и только когда журнал
+    /// длиннее 1000 записей. Возвращает число удалённых записей.
+    pub fn compact_journal(&mut self, now_ms: u64, force: bool) -> Result<usize> {
+        if !force {
+            let total: i64 = self.conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM ops) + (SELECT COUNT(*) FROM pl_ops)",
+                [],
+                |r| r.get(0),
+            )?;
+            if total < 1000 {
+                return Ok(0);
+            }
+            let last: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'last_compact_ms'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let last = last.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            if now_ms.saturating_sub(last) < 24 * 3600 * 1000 {
+                return Ok(0);
+            }
+        }
+        let (a, b) = journal::compact(&self.conn)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('last_compact_ms', ?1)",
+            [now_ms.to_string()],
+        )?;
+        Ok(a + b)
+    }
+
     /// Удаляет из корзины всё старше 30 дней. Возвращает число очищенных треков.
     pub fn purge_expired_trash(&mut self, now_ms: u64) -> Result<usize> {
         let ids = journal::expired_trash(&self.conn, now_ms)?;
