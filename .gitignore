@@ -15,3 +15,5 @@ app/.metadata
 *.jks
 identity.json
 hydra.db
+# файл блокировки зависимостей не храним: его создаёт cargo
+Cargo.lock
