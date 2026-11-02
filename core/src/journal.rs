@@ -240,6 +240,12 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
     )?;
 
     if s.deleted {
+        // дата удаления = время операции «удалить» (одинакова на всех устройствах), а не
+        // момент, когда мы о ней узнали: иначе давняя история чужих удалений выглядела бы свежей
+        let deleted_ms = Hlc::decode(&last_hlc)
+            .map(|h| h.wall_ms)
+            .unwrap_or(now_ms)
+            .min(now_ms);
         conn.execute(
             "INSERT OR IGNORE INTO trash(track_id, file_name, playlist_id, deleted_ms, reason)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -247,7 +253,7 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
                 s.track_id,
                 s.file_name,
                 s.playlist_id,
-                now_ms as i64,
+                deleted_ms as i64,
                 reason
             ],
         )?;

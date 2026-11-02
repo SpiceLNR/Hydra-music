@@ -62,6 +62,9 @@ pub struct TrashItem {
     pub title: String,
     pub file_name: String,
     pub deleted_ms: i64,
+    /// Файл лежит в корзине этого устройства. `false`: удалён на другом устройстве,
+    /// при восстановлении файл придёт оттуда.
+    pub has_file: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -185,9 +188,14 @@ impl Library {
                         .unwrap_or_else(|| stem(&file_name)),
                     file_name,
                     deleted_ms: r.get(2)?,
+                    has_file: false,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut rows = rows;
+        for it in rows.iter_mut() {
+            it.has_file = self.trash_dir(&it.track_id).join(&it.file_name).is_file();
+        }
         Ok(rows)
     }
 

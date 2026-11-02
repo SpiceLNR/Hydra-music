@@ -53,8 +53,12 @@ class _TrashScreenState extends State<TrashScreen> {
   }
 
   Future<void> _restore(String id) async {
+    final remote = _items.any((i) => i.id == id && !i.hasFile);
     try {
       await hydraLibrary.restoreTrack(id);
+      if (remote && mounted) {
+        _toast('Трек вернулся в плейлист: файл придёт с другого устройства при синхронизации');
+      }
     } on CoreException catch (e) {
       if (mounted) _toast(e.message);
     }
@@ -130,7 +134,10 @@ class _TrashScreenState extends State<TrashScreen> {
                       child: ListTile(
                         leading: const Cover(isVideo: false),
                         title: Text(item.title, style: const TextStyle(fontSize: 18)),
-                        subtitle: Text('${item.fileName} · ${_age(item.deletedMs)}'),
+                        subtitle: Text(
+                          '${item.fileName} · ${_age(item.deletedMs)}'
+                          '${item.hasFile ? '' : ' · файл на другом устройстве'}',
+                        ),
                         onTap: () => setState(() => _selectedId = isSel ? null : item.id),
                       ),
                     );

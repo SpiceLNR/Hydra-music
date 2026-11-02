@@ -500,11 +500,17 @@ impl Library {
                         ));
                     }
                 } else if !self.trash_dir(id).exists() {
-                    // удалённый трек, которого у нас никогда не было (или его файла уже нет):
-                    // записи в корзине без файла не нужны, иначе вся старая история
-                    // удалений чужого устройства раздувает корзину
-                    self.conn
-                        .execute("DELETE FROM trash WHERE track_id = ?1", [id])?;
+                    // Удалённый трек, файла которого у нас нет: запись остаётся в корзине
+                    // (его можно восстановить, файл придёт от устройства, где он лежит в
+                    // корзине), но только пока не истёк срок хранения. Давняя история чужих
+                    // удалений корзину не раздувает.
+                    let limit = now_ms
+                        .saturating_sub(journal::TRASH_RETENTION_DAYS * 24 * 3600 * 1000)
+                        as i64;
+                    self.conn.execute(
+                        "DELETE FROM trash WHERE track_id = ?1 AND deleted_ms <= ?2",
+                        params![id, limit],
+                    )?;
                 }
                 self.set_pending(id, false)?;
                 continue;
@@ -1286,7 +1292,46 @@ mod tests {
         a.delete_track(&del, T0 + 2).unwrap();
         a.purge_track(&del).unwrap();
 
+        // удаление было давно (больше срока хранения): у нового устройства корзина пуста
+        let day = 24 * 3600 * 1000;
+        sync_pair(&mut a, &mut b, T0 + 31 * day);
+        assert!(b.trash_items().unwrap().is_empty());
+    }
+
+    /// Недавнее удаление на другом устройстве видно в корзине (без файла), его можно
+    /// восстановить: файл приедет оттуда, где он лежит в корзине.
+    #[test]
+    fn recent_remote_deletion_is_visible_and_restorable_from_any_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut a = device(&tmp, "phone");
+        let mut b = device(&tmp, "pc");
+        let mut c = device(&tmp, "tablet");
+        put(&a, "Rock", "a.mp3", "aaa");
+        a.scan(T0 + 1).unwrap();
         sync_pair(&mut a, &mut b, T0 + 10);
+        let rock = a.playlists().unwrap()[0].playlist_id.clone();
+        let id = a.tracks(&rock).unwrap()[0].track_id.clone();
+        a.delete_track(&id, T0 + 20).unwrap();
+        sync_pair(&mut a, &mut b, T0 + 30);
+        assert!(b.trash_items().unwrap()[0].has_file, "у ПК файл в корзине");
+
+        // новое устройство ничего не знает, кроме журнала
+        sync_pair(&mut c, &mut b, T0 + 40);
+        let items = c.trash_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].has_file);
+        assert_eq!(
+            items[0].deleted_ms,
+            (T0 + 20) as i64,
+            "дата удаления с исходного устройства"
+        );
+
+        // восстанавливаем на новом устройстве: файл едет от ПК
+        c.restore_track(&id, T0 + 50).unwrap();
+        sync_pair(&mut c, &mut b, T0 + 60);
+        assert_eq!(names(&c, "Rock"), ["a.mp3"]);
+        assert_eq!(names(&b, "Rock"), ["a.mp3"]);
+        assert!(c.sync_needs().unwrap().is_empty());
         assert!(b.trash_items().unwrap().is_empty());
     }
 

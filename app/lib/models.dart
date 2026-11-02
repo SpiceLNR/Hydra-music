@@ -89,18 +89,28 @@ class TrackInfo {
 }
 
 class TrashItem {
-  TrashItem({required this.id, required this.title, required this.fileName, required this.deletedMs});
+  TrashItem({
+    required this.id,
+    required this.title,
+    required this.fileName,
+    required this.deletedMs,
+    this.hasFile = true,
+  });
 
   final String id;
   final String title;
   final String fileName;
   final int deletedMs;
 
+  /// `false`: удалён на другом устройстве; при восстановлении файл придёт оттуда.
+  final bool hasFile;
+
   factory TrashItem.fromJson(Map<String, dynamic> j) => TrashItem(
         id: j['track_id'] as String,
         title: j['title'] as String,
         fileName: j['file_name'] as String,
         deletedMs: (j['deleted_ms'] as num).toInt(),
+        hasFile: (j['has_file'] as bool?) ?? true,
       );
 }
 
