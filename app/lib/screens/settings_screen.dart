@@ -37,7 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     final old = hydraLibrary.rootPath ?? '';
     final String? picked;
     try {
-      picked = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Новая папка библиотеки');
+      picked = await FilePicker.getDirectoryPath(dialogTitle: 'Новая папка библиотеки');
     } catch (e) {
       _toast('Не удалось открыть выбор папки: $e');
       return;
