@@ -299,6 +299,12 @@ fn receive_files<H: LibHandle>(
         }
         if !hdr.present {
             report.files_failed += 1;
+            if report.files_failed <= 5 {
+                progress(&format!(
+                    "#Файл не прислан (у отправителя его нет или он ещё не получен): {}/{}",
+                    need.playlist, need.file_name
+                ));
+            }
             continue;
         }
         progress(&format!("Получаю файлы: {} из {}", i + 1, total));
@@ -330,6 +336,21 @@ fn receive_files<H: LibHandle>(
             }
         } else {
             report.files_failed += 1;
+            if report.files_failed <= 5 {
+                let journal = h
+                    .with(|l| l.sync_track_sha(&need.track_id))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let short = |s: &str| s.chars().take(8).collect::<String>();
+                progress(&format!(
+                    "#Файл отклонён: {}/{}: прислан хэш {}, в журнале {}",
+                    need.playlist,
+                    need.file_name,
+                    short(&hdr.sha256),
+                    short(&journal)
+                ));
+            }
         }
     }
     Ok(())

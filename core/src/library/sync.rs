@@ -853,6 +853,11 @@ impl Library {
         Ok(dir.join(format!("{track_id}.part")))
     }
 
+    /// Хэш, записанный в журнале для трека (для диагностики отклонённых файлов).
+    pub fn sync_track_sha(&self, track_id: &str) -> Result<Option<String>> {
+        Ok(journal::get_track(&self.conn, track_id)?.map(|t| t.sha256))
+    }
+
     /// Принимает скачанный файл: проверяет хэш и одним действием переносит в плейлист.
     /// Возвращает `false`, если файл не подошёл (его нужно запросить заново позже).
     pub fn sync_store_file(&mut self, track_id: &str, tmp: &Path, sha256: &str) -> Result<bool> {

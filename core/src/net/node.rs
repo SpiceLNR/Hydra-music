@@ -5,14 +5,14 @@
 //! другое устройство повторит попытку позже.
 
 use super::channel::{handshake_initiator, handshake_responder, CancelEpoch, Secure, Transport};
-use super::identity::{Family, Identity};
+use super::identity::{Family, Identity, Peer};
 use super::session::{run_session, Hello, LibHandle, Role, SessionReport};
 use super::{hex, now_ms, unhex};
 use crate::{Error, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -81,14 +81,21 @@ fn via_text(addr: &str) -> String {
 }
 
 /// Сбой на этапе рукопожатия: чаще всего собеседник сразу закрыл соединение.
-fn explain(e: Error, via: &str) -> Error {
+fn explain(e: Error, via: &str, pairing: bool) -> Error {
     let text = e.to_string();
     if text.contains("fill whole buffer") || text.contains("unexpected end") {
-        bad(format!(
-            "устройство ответило и закрыло соединение ({via}). Проверьте, что QR-код на втором \
-             устройстве ещё действует (3 минуты) и что на нём не идёт другая синхронизация; \
-             причина записана в журнале того устройства"
-        ))
+        if pairing {
+            bad(format!(
+                "устройство ответило и закрыло соединение ({via}). Проверьте, что QR-код на втором \
+                 устройстве ещё действует (3 минуты) и что на нём не идёт другая синхронизация; \
+                 причина записана в журнале того устройства"
+            ))
+        } else {
+            bad(format!(
+                "устройство закрыло соединение ({via}): скорее всего, оно занято другой \
+                 синхронизацией; попытка повторится сама"
+            ))
+        }
     } else {
         bad(format!("{text} ({via})"))
     }
@@ -219,7 +226,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                             ch.bind_cancel(&self.cancel);
                             return Ok((ch, a));
                         }
-                        Err(e) => notes.push(explain(e, &via_text(&a)).to_string()),
+                        Err(e) => notes.push(explain(e, &via_text(&a), psk.is_some()).to_string()),
                     }
                 }
                 Err(e) => notes.push(e.to_string()),
@@ -233,7 +240,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                         ch.bind_cancel(&self.cancel);
                         return Ok((ch, String::new()));
                     }
-                    Err(e) => notes.push(explain(e, &via_text("")).to_string()),
+                    Err(e) => notes.push(explain(e, &via_text(""), psk.is_some()).to_string()),
                 },
                 Err(e) => notes.push(format!("через интернет: {e}")),
             }
@@ -666,30 +673,98 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         }
         let endpoint = peer.endpoint.clone();
         let title = format!("Синхронизация с «{}»", peer.name);
-        self.spawn_job(&title, move |me| {
-            let (mut ch, addr) = me.dial_secure(&addrs, &endpoint, internet, None)?;
-            if hex(&ch.remote_static) != peer.public_key {
-                return Err(bad(
-                    "ключ устройства изменился: отзовите его и добавьте заново",
-                ));
+        if self.try_session().is_none() {
+            self.fail("Уже идёт другая синхронизация, подождите");
+            return Ok(());
+        }
+        let me = Arc::clone(self);
+        thread::spawn(move || {
+            {
+                let mut st = lock(&me.st);
+                st.busy = true;
+                st.error.clear();
+                st.message = title;
             }
-            let key = ch.remote_static.clone();
-            let id = peer.device_id.clone();
-            let verify = |hello: &Hello| me.verify(hello, &key, false, Some(&id), &addr);
-            let rep = run_session(
-                &mut ch,
-                &*me.handle,
-                Role::Initiator,
-                &me.hello(),
-                &verify,
-                &|m| me.set_message(m),
-            )?;
-            let _ = lock(&me.family).touch(&id, &addr);
-            let mut rep = rep;
-            rep.via_internet = addr.is_empty();
-            Ok(rep)
+            let res = me.sync_with_retries(&peer, &addrs, &endpoint, internet);
+            me.finish(res, false);
         });
         Ok(())
+    }
+
+    /// Соединение устанавливается, не занимая замок сеанса: иначе два устройства, которые
+    /// набирают друг друга одновременно, отвергают друг друга. Если соединиться не вышло
+    /// (в том числе собеседник закрыл связь, потому что был занят), через несколько секунд
+    /// пробуем снова; пауза у устройств разная, поэтому они не сталкиваются повторно.
+    fn sync_with_retries(
+        &self,
+        peer: &Peer,
+        addrs: &[String],
+        endpoint: &str,
+        internet: bool,
+    ) -> Result<SessionReport> {
+        let pause = 2 + u64::from(self.ident.device_id.bytes().next().unwrap_or(0)) % 5;
+        let mut last: Option<Error> = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                self.log(&format!("Повторная попытка через {pause} с"));
+                thread::sleep(Duration::from_secs(pause));
+            }
+            match self.sync_once(peer, addrs, endpoint, internet) {
+                Ok(rep) => return Ok(rep),
+                Err((e, started)) => {
+                    if started {
+                        return Err(e); // сеанс уже шёл: повторять нельзя
+                    }
+                    last = Some(e);
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| bad("не удалось подключиться")))
+    }
+
+    /// Одна попытка. В ошибке второе значение: начался ли обмен данными.
+    fn sync_once(
+        &self,
+        peer: &Peer,
+        addrs: &[String],
+        endpoint: &str,
+        internet: bool,
+    ) -> std::result::Result<SessionReport, (Error, bool)> {
+        let (mut ch, addr) = self
+            .dial_secure(addrs, endpoint, internet, None)
+            .map_err(|e| (e, false))?;
+        if hex(&ch.remote_static) != peer.public_key {
+            return Err((
+                bad("ключ устройства изменился: отзовите его и добавьте заново"),
+                true,
+            ));
+        }
+        // замок берём только теперь, когда соединение уже есть
+        let Some(_guard) = self.try_session() else {
+            return Err((bad("занято другой синхронизацией"), false));
+        };
+        let key = ch.remote_static.clone();
+        let id = peer.device_id.clone();
+        let started = AtomicBool::new(false);
+        let verify = |hello: &Hello| self.verify(hello, &key, false, Some(&id), &addr);
+        let progress = |m: &str| {
+            if !m.starts_with('#') {
+                started.store(true, Ordering::SeqCst);
+            }
+            self.set_message(m)
+        };
+        let mut rep = run_session(
+            &mut ch,
+            &*self.handle,
+            Role::Initiator,
+            &self.hello(),
+            &verify,
+            &progress,
+        )
+        .map_err(|e| (e, started.load(Ordering::SeqCst)))?;
+        let _ = lock(&self.family).touch(&id, &addr);
+        rep.via_internet = addr.is_empty();
+        Ok(rep)
     }
 
     // ---------- состояние для интерфейса ----------
