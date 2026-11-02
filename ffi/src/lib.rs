@@ -496,10 +496,12 @@ mod tests {
         }
     }
 
-    /// Единственный тест, который трогает глобальное состояние (порядок шагов важен).
+    /// Тест трогает глобальное состояние (порядок шагов важен); идёт под `SERIAL`.
     #[test]
     fn full_flow_through_json() {
         let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        // другой тест мог уже открыть библиотеку: начинаем с пустого состояния
+        *STATE.lock().unwrap_or_else(|p| p.into_inner()) = None;
         // до open всё, кроме version, отклоняется
         let early = call_json("playlists", json!({}));
         assert_eq!(early["ok"], false);
