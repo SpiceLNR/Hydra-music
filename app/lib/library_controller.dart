@@ -77,18 +77,50 @@ class LibraryController extends ChangeNotifier {
     return File('${support.path}${Platform.pathSeparator}library_root.txt');
   }
 
+  /// На Android выбор дублируется в общей памяти: после переустановки приложения приватная
+  /// папка стирается, а этот файл остаётся, и библиотека находится на прежнем месте.
+  File? get _pointerFile => Platform.isAndroid ? File('/storage/emulated/0/Music/.hydra-root') : null;
+
+  /// Запоминает выбранную папку. Хватает одной удавшейся записи.
+  Future<void> _saveRoot(String path) async {
+    var saved = false;
+    Object? error;
+    try {
+      await (await _rootFile()).writeAsString(path, flush: true);
+      saved = true;
+    } catch (e) {
+      error = e;
+    }
+    try {
+      await _pointerFile?.writeAsString(path, flush: true);
+      if (_pointerFile != null) saved = true;
+    } catch (e) {
+      error ??= e;
+    }
+    if (!saved) notice = 'Папка выбрана, но выбор не сохранился: $error';
+  }
+
+  /// Начинает работать с уже существующей папкой без переноса файлов
+  /// (например, после переустановки, когда музыка лежит не в папке по умолчанию).
+  Future<void> useFolder(String path) async {
+    try {
+      await Core.call('abort_sync');
+    } on CoreException {
+      // синхронизации могло не быть
+    }
+    await PlayerService.instance.releaseForMove();
+    await _saveRoot(path);
+    tracksRevision++;
+    await _open();
+  }
+
   /// Переносит библиотеку в [newRoot] (пустая папка или несуществующая). Музыка при этом
   /// останавливается, идущая синхронизация обрывается. Бросает [CoreException].
   Future<Map<String, dynamic>> moveTo(String newRoot) async {
     await PlayerService.instance.releaseForMove();
     final report = await Core.call('move_library', {'new_root': newRoot}) as Map<String, dynamic>;
     rootPath = newRoot;
-    // запоминаем выбор; если не вышло, после перезапуска приложение откроет прежнюю папку
-    try {
-      await (await _rootFile()).writeAsString(newRoot, flush: true);
-    } catch (e) {
-      notice = 'Папка перенесена, но выбор не сохранился: $e';
-    }
+    await _saveRoot(newRoot);
     tracksRevision++;
     notifyListeners();
     await refresh();
@@ -103,7 +135,16 @@ class LibraryController extends ChangeNotifier {
         if (saved.isNotEmpty) return saved;
       }
     } catch (_) {
-      // файл недоступен: работаем с папкой по умолчанию
+      // файл недоступен: пробуем общий указатель, потом папку по умолчанию
+    }
+    try {
+      final p = _pointerFile;
+      if (p != null && await p.exists()) {
+        final saved = (await p.readAsString()).trim();
+        if (saved.isNotEmpty && await Directory(saved).exists()) return saved;
+      }
+    } catch (_) {
+      // указателя нет или нет доступа
     }
     if (Platform.isAndroid) return '/storage/emulated/0/Music/Hydra';
     if (Platform.isWindows) {

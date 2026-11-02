@@ -375,6 +375,12 @@ fn dispatch(request: &str) -> Result<Value, String> {
             "ffi": env!("CARGO_PKG_VERSION"),
         })),
         "open" => open(args),
+        "abort_sync" => {
+            if let Ok(n) = node() {
+                n.abort_sync();
+            }
+            Ok(Value::Null)
+        }
         "move_library" => {
             // переезд папки: сначала обрываем идущую синхронизацию, она держит файлы
             if let Ok(n) = node() {

@@ -54,23 +54,39 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
       // проверку выполнит ядро
     }
     if (!mounted) return;
-    final go = await showDialog<bool>(
+    final choice = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Перенести библиотеку?'),
+        title: const Text('Папка библиотеки'),
         content: Text(
-          'Все плейлисты и корзина переедут\nиз: $old\nв: $target\n\n'
-          'Музыка остановится, идущая синхронизация прервётся. Если папки на разных дисках, '
-          'перенос может занять много времени: не закрывайте приложение. '
-          'Если что-то пойдёт не так, всё вернётся на место.',
+          'Выбрано: $picked\n\n'
+          '«Перенести»: все плейлисты и корзина переедут\nиз: $old\nв: $target\n'
+          'Если папки на разных дисках, это может занять много времени. '
+          'Если что-то пойдёт не так, всё вернётся на место.\n\n'
+          '«Использовать эту»: ничего не переносится, приложение начнёт работать с выбранной '
+          'папкой как с библиотекой (например, после переустановки, когда музыка уже лежит там).\n\n'
+          'Музыка остановится, идущая синхронизация прервётся.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Перенести')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'use'), child: const Text('Использовать эту')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'move'), child: const Text('Перенести')),
         ],
       ),
     );
-    if (go != true || !mounted) return;
+    if (choice == null || !mounted) return;
+    if (choice == 'use') {
+      try {
+        await hydraLibrary.useFolder(picked);
+        if (mounted) {
+          setState(() {});
+          _toast('Теперь библиотека: $picked');
+        }
+      } catch (e) {
+        if (mounted) _toast('Не удалось открыть папку: $e');
+      }
+      return;
+    }
     final nav = Navigator.of(context, rootNavigator: true);
     unawaited(showDialog<void>(
       context: context,
