@@ -313,6 +313,26 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
     return _engine.pause();
   }
 
+  /// Перед переездом папки библиотеки: останавливает музыку и забывает очередь
+  /// (пути в ней станут неверными, а плеер держит файлы открытыми).
+  Future<void> releaseForMove() async {
+    try {
+      await _engine.pause();
+      await _engine.open(const [], 0);
+    } catch (_) {
+      // плеер мог ничего не играть; главное - забыть очередь
+    }
+    queue = const [];
+    _base = const [];
+    index = 0;
+    playing = false;
+    position = Duration.zero;
+    duration = Duration.zero;
+    hasTrack.value = false;
+    notifyListeners();
+    _handler?.publishStopped();
+  }
+
   /// «Стоп»: пауза и возврат в начало трека. Очередь остаётся, уведомление исчезает.
   @override
   Future<void> stop() async {

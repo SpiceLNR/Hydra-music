@@ -1,5 +1,7 @@
-import 'dart:io' show Platform;
+import 'dart:async';
+import 'dart:io' show Directory, Platform;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../build_info.dart';
@@ -28,6 +30,84 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _readBattery();
+  }
+
+  /// Выбор новой папки и перенос в неё всей библиотеки.
+  Future<void> _changeRoot() async {
+    final old = hydraLibrary.rootPath ?? '';
+    final String? picked;
+    try {
+      picked = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Новая папка библиотеки');
+    } catch (e) {
+      _toast('Не удалось открыть выбор папки: $e');
+      return;
+    }
+    if (picked == null || !mounted) return;
+    // непустую папку (например, «Музыка») не трогаем: библиотека ляжет в подпапку Hydra
+    var target = picked;
+    try {
+      final dir = Directory(picked);
+      if (await dir.exists() && !await dir.list().isEmpty) {
+        target = '$picked${Platform.pathSeparator}Hydra';
+      }
+    } catch (_) {
+      // проверку выполнит ядро
+    }
+    if (!mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Перенести библиотеку?'),
+        content: Text(
+          'Все плейлисты и корзина переедут\nиз: $old\nв: $target\n\n'
+          'Музыка остановится, идущая синхронизация прервётся. Если папки на разных дисках, '
+          'перенос может занять много времени: не закрывайте приложение. '
+          'Если что-то пойдёт не так, всё вернётся на место.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Перенести')),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    final nav = Navigator.of(context, rootNavigator: true);
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 20),
+              Expanded(child: Text('Переношу файлы…')),
+            ],
+          ),
+        ),
+      ),
+    ));
+    String message;
+    try {
+      final r = await hydraLibrary.moveTo(target);
+      final left = (r['leftover'] as List?)?.length ?? 0;
+      message = 'Библиотека перенесена: файлов ${r['files']}'
+          '${left > 0 ? '. Не удалось убрать старые файлы: $left (папка занята)' : ''}';
+    } on CoreException catch (e) {
+      message = 'Перенос не выполнен, всё осталось на месте: ${e.message}';
+    } catch (e) {
+      message = 'Перенос не выполнен: $e';
+    }
+    nav.pop();
+    if (mounted) {
+      setState(() {});
+      _toast(message);
+    }
+  }
+
+  void _toast(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   @override
@@ -192,6 +272,8 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
           ListTile(
             title: const Text('Папка библиотеки'),
             subtitle: Text(hydraLibrary.rootPath ?? 'Android: Music/Hydra  ·  Windows: Музыка\\Hydra'),
+            trailing: const Icon(Icons.drive_file_move_outline),
+            onTap: _changeRoot,
           ),
           // Проверка связи Flutter <-> Rust (временная диагностика этапа 2)
           FutureBuilder<dynamic>(

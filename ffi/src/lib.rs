@@ -156,6 +156,7 @@ fn call(st: &mut State, method: &str, args: &Value) -> Result<Value, String> {
             }
             to_json(report)
         }
+        "move_library" => to_json(st.lib.move_root(&PathBuf::from(arg_str(args, "new_root")?))),
         "playlists" => to_json(st.lib.playlists()),
         "held_deletions" => to_json(Ok::<_, hydra_core::Error>(st.lib.held_deletions().to_vec())),
         "resolve_held" => {
@@ -374,6 +375,13 @@ fn dispatch(request: &str) -> Result<Value, String> {
             "ffi": env!("CARGO_PKG_VERSION"),
         })),
         "open" => open(args),
+        "move_library" => {
+            // переезд папки: сначала обрываем идущую синхронизацию, она держит файлы
+            if let Ok(n) = node() {
+                n.abort_sync();
+            }
+            with_state(|st| call(st, &method, args))
+        }
         m if m.starts_with("net_") => net_call(m, args),
         _ => with_state(|st| call(st, &method, args)),
     }
@@ -420,6 +428,9 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    /// Тесты делят одно глобальное состояние библиотеки, поэтому идут по очереди.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
     fn call_json(method: &str, args: Value) -> Value {
         let out = handle(&json!({ "method": method, "args": args }).to_string());
         serde_json::from_str(&out).unwrap()
@@ -429,6 +440,37 @@ mod tests {
         let v = call_json(method, args);
         assert_eq!(v["ok"], true, "{method} failed: {v}");
         v["result"].clone()
+    }
+
+    #[test]
+    fn move_library_changes_the_root() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Hydra");
+        ok(
+            "open",
+            json!({
+                "root": root.to_string_lossy(),
+                "data_dir": tmp.path().join("data").to_string_lossy(),
+                "cache_dir": tmp.path().join("cache").to_string_lossy(),
+            }),
+        );
+        fs::create_dir_all(root.join("Rock")).unwrap();
+        fs::write(root.join("Rock").join("a.mp3"), "aaa").unwrap();
+        ok("scan", json!({}));
+        let new_root = tmp.path().join("Moved");
+        let rep = ok(
+            "move_library",
+            json!({ "new_root": new_root.to_string_lossy() }),
+        );
+        assert!(rep["files"].as_u64().unwrap() >= 1);
+        assert!(new_root.join("Rock").join("a.mp3").is_file());
+        assert!(!root.join("Rock").exists());
+        // библиотека продолжает работать на новом месте
+        ok("scan", json!({}));
+        assert_eq!(ok("playlists", json!({})).as_array().unwrap().len(), 1);
+        let bad = call_json("move_library", json!({ "new_root": "relative" }));
+        assert_eq!(bad["ok"], false);
     }
 
     #[test]
@@ -457,6 +499,7 @@ mod tests {
     /// Единственный тест, который трогает глобальное состояние (порядок шагов важен).
     #[test]
     fn full_flow_through_json() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
         // до open всё, кроме version, отклоняется
         let early = call_json("playlists", json!({}));
         assert_eq!(early["ok"], false);

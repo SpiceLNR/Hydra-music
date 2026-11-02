@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'core_bridge.dart';
 import 'models.dart';
 import 'net_service.dart';
+import 'player_service.dart';
 
 enum LibraryStatus { idle, loading, needPermission, ready, error }
 
@@ -70,7 +71,40 @@ class LibraryController extends ChangeNotifier {
     }
   }
 
+  /// Файл с выбранной пользователем папкой библиотеки (в приватной папке приложения).
+  Future<File> _rootFile() async {
+    final support = await getApplicationSupportDirectory();
+    return File('${support.path}${Platform.pathSeparator}library_root.txt');
+  }
+
+  /// Переносит библиотеку в [newRoot] (пустая папка или несуществующая). Музыка при этом
+  /// останавливается, идущая синхронизация обрывается. Бросает [CoreException].
+  Future<Map<String, dynamic>> moveTo(String newRoot) async {
+    await PlayerService.instance.releaseForMove();
+    final report = await Core.call('move_library', {'new_root': newRoot}) as Map<String, dynamic>;
+    rootPath = newRoot;
+    // запоминаем выбор; если не вышло, после перезапуска приложение откроет прежнюю папку
+    try {
+      await (await _rootFile()).writeAsString(newRoot, flush: true);
+    } catch (e) {
+      notice = 'Папка перенесена, но выбор не сохранился: $e';
+    }
+    tracksRevision++;
+    notifyListeners();
+    await refresh();
+    return report;
+  }
+
   Future<String> _rootPath() async {
+    try {
+      final f = await _rootFile();
+      if (await f.exists()) {
+        final saved = (await f.readAsString()).trim();
+        if (saved.isNotEmpty) return saved;
+      }
+    } catch (_) {
+      // файл недоступен: работаем с папкой по умолчанию
+    }
     if (Platform.isAndroid) return '/storage/emulated/0/Music/Hydra';
     if (Platform.isWindows) {
       final home = Platform.environment['USERPROFILE'] ?? '';

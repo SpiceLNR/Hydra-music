@@ -24,6 +24,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+mod relocate;
 mod sync;
 pub use sync::{FileNeed, InvPlaylist, InvTrack, Inventory, MergeReport, PlOp, SyncBatch, Vector};
 
