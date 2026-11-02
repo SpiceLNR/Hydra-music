@@ -904,6 +904,27 @@ impl Library {
         Ok(Some((path, sha)))
     }
 
+    /// Как `sync_file_for`, но если наш файл цел и не ждёт загрузки, а хэш в журнале на
+    /// него не похож (журнал устарел после правки тегов), исправляет журнал по нашему файлу
+    /// и в этот раз файл не отдаёт: получатель всё равно отверг бы его. Файл поедет при
+    /// следующей синхронизации, когда исправление дойдёт до получателя.
+    /// Второе значение: журнал исправлен.
+    pub fn sync_file_or_heal(
+        &mut self,
+        track_id: &str,
+        now_ms: u64,
+    ) -> Result<(Option<(PathBuf, String)>, bool)> {
+        let Some((path, sha)) = self.sync_file_for(track_id)? else {
+            return Ok((None, false));
+        };
+        let journal_sha = self.sync_track_sha(track_id)?.unwrap_or_default();
+        if !journal_sha.is_empty() && journal_sha != sha {
+            self.record(now_ms, Kind::Edit, track_id, json!({ "sha256": sha }))?;
+            return Ok((None, true));
+        }
+        Ok((Some((path, sha)), false))
+    }
+
     /// Куда складывать скачиваемый файл до проверки (скрытая папка внутри библиотеки,
     /// чтобы переименование в плейлист было мгновенным).
     pub fn sync_tmp_path(&self, track_id: &str) -> Result<PathBuf> {
@@ -1117,6 +1138,42 @@ mod tests {
         fs::remove_file(a.root().join("Kadr").join("OST.mp3")).unwrap();
         fs::remove_file(b.root().join("Kadr").join("OST.mp3")).unwrap();
         assert_eq!(resolve_pair(&mut a, &mut b, T0 + 40), 0);
+    }
+
+    #[test]
+    fn sender_with_stale_journal_hash_heals_it_and_the_file_follows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut a = device(&tmp, "phone");
+        let mut b = device(&tmp, "pc");
+        put(&a, "Kadr", "S.mp3", "v1");
+        a.scan(T0 + 1).unwrap();
+        sync_pair(&mut a, &mut b, T0 + 10);
+        let id = a.tracks(&a.playlists().unwrap()[0].playlist_id).unwrap()[0]
+            .track_id
+            .clone();
+        // журнал устарел: хэш записан, а файл у автора другой и не «ждёт загрузки»
+        a.record(
+            T0 + 20,
+            Kind::Edit,
+            &id,
+            json!({ "sha256": "cd".repeat(32) }),
+        )
+        .unwrap();
+        fs::write(a.root().join("Kadr").join("S.mp3"), "good").unwrap();
+        fs::write(b.root().join("Kadr").join("S.mp3"), "stale").unwrap();
+        let from_a = a.sync_batch_for(&b.sync_vector().unwrap()).unwrap();
+        b.sync_apply(&from_a, T0 + 30).unwrap();
+        assert_eq!(b.sync_needs().unwrap().len(), 1);
+        let (file, healed) = a.sync_file_or_heal(&id, T0 + 40).unwrap();
+        assert!(file.is_none() && healed);
+        sync_pair(&mut a, &mut b, T0 + 50);
+        assert!(b.sync_needs().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(b.root().join("Kadr").join("S.mp3")).unwrap(),
+            "good"
+        );
+        // здоровый файл отдаётся сразу
+        assert!(a.sync_file_or_heal(&id, T0 + 60).unwrap().0.is_some());
     }
 
     #[test]

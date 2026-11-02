@@ -252,7 +252,13 @@ fn send_files<H: LibHandle>(
     let total = needs.len();
     let t0 = std::time::Instant::now();
     for (i, need) in needs.iter().enumerate() {
-        let found = h.with(|l| l.sync_file_for(&need.track_id))?;
+        let (found, healed) = h.with(|l| l.sync_file_or_heal(&need.track_id, now_ms()))?;
+        if healed {
+            progress(&format!(
+                "#Хэш в журнале не совпадал с моим файлом, исправил: {}/{}",
+                need.playlist, need.file_name
+            ));
+        }
         let Some((path, sha)) = found else {
             let hdr = FileHeader {
                 track_id: need.track_id.clone(),
