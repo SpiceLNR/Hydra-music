@@ -66,6 +66,10 @@ pub struct FileNeed {
     pub sha256: String,
     pub file_name: String,
     pub playlist: String,
+    /// Хэш файла, который у нас уже лежит под этим именем, но не совпал с журналом
+    /// (пусто, если файла нет).
+    #[serde(default)]
+    pub have_sha: String,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
@@ -815,17 +819,72 @@ impl Library {
              FROM tracks t JOIN playlists p ON p.playlist_id = t.playlist_id
              WHERE t.deleted = 0 AND t.pending = 1 ORDER BY t.track_id",
         )?;
-        let rows = stmt
+        let mut rows = stmt
             .query_map([], |r| {
                 Ok(FileNeed {
                     track_id: r.get(0)?,
                     sha256: r.get(1)?,
                     file_name: r.get(2)?,
                     playlist: r.get(3)?,
+                    have_sha: String::new(),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        for n in rows.iter_mut() {
+            if let Ok(t) = self.track_file_path(&n.track_id) {
+                if t.is_file() {
+                    n.have_sha = sha256_file(&t)?;
+                }
+            }
+        }
         Ok(rows)
+    }
+
+    fn track_file_path(&self, track_id: &str) -> Result<PathBuf> {
+        let t = journal::get_track(&self.conn, track_id)?
+            .ok_or_else(|| Error::Invalid(format!("track {track_id} not found")))?;
+        Ok(self.playlist_dir(&t.playlist_id)?.join(&t.file_name))
+    }
+
+    /// Тупик: файл нужен обоим устройствам, потому что хэш в журнале не совпадает ни с чьим
+    /// файлом. Если у кого-то свой файл всё же лежит, одно из устройств (по общему для обоих
+    /// правилу: меньший хэш, при равных меньший id) записывает его хэш в журнал. Остальные
+    /// получат либо такой же файл, либо этот.
+    /// Возвращает id треков, которые в этом сеансе передавать не нужно (обе стороны
+    /// исключают их из списков одинаково), и сколько хэшей исправил именно это устройство.
+    pub fn sync_resolve_stuck(
+        &mut self,
+        peer_id: &str,
+        mine: &[FileNeed],
+        theirs: &[FileNeed],
+        now_ms: u64,
+    ) -> Result<(HashSet<String>, usize)> {
+        let mut skip = HashSet::new();
+        let mut healed = 0;
+        for m in mine {
+            let Some(t) = theirs.iter().find(|t| t.track_id == m.track_id) else {
+                continue;
+            };
+            if m.have_sha.is_empty() && t.have_sha.is_empty() {
+                continue; // файла нет ни у кого: ждём, пока он появится
+            }
+            skip.insert(m.track_id.clone());
+            let i_heal = !m.have_sha.is_empty()
+                && (t.have_sha.is_empty()
+                    || m.have_sha < t.have_sha
+                    || (m.have_sha == t.have_sha && self.device_id.as_str() < peer_id));
+            if i_heal {
+                self.record(
+                    now_ms,
+                    Kind::Edit,
+                    &m.track_id,
+                    json!({ "sha256": m.have_sha }),
+                )?;
+                self.set_pending(&m.track_id, false)?;
+                healed += 1;
+            }
+        }
+        Ok((skip, healed))
     }
 
     /// Файл трека для отправки другому устройству: путь и хэш. `None`, если файла у нас нет
@@ -982,6 +1041,82 @@ mod tests {
                 assert!(to.sync_store_file(&need.track_id, &tmp, &sha).unwrap());
             }
         }
+    }
+
+    /// Хэш в журнале не совпал ни с одним файлом: оба устройства «ждут» файл друг у друга.
+    /// После исправления журнала файлы сходятся, а правка тегов не теряется.
+    fn stuck_pair(a_content: &str, b_content: &str) -> (Library, Library, TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut a = device(&tmp, "phone");
+        let mut b = device(&tmp, "pc");
+        put(&a, "Kadr", "OST.mp3", "v1");
+        a.scan(T0 + 1).unwrap();
+        sync_pair(&mut a, &mut b, T0 + 10);
+        let id = a.tracks(&a.playlists().unwrap()[0].playlist_id).unwrap()[0]
+            .track_id
+            .clone();
+        // журнал получает хэш, которого нет ни у кого
+        a.record(
+            T0 + 20,
+            Kind::Edit,
+            &id,
+            json!({ "sha256": "ab".repeat(32) }),
+        )
+        .unwrap();
+        a.set_pending(&id, true).unwrap();
+        fs::write(a.root().join("Kadr").join("OST.mp3"), a_content).unwrap();
+        fs::write(b.root().join("Kadr").join("OST.mp3"), b_content).unwrap();
+        let from_a = a.sync_batch_for(&b.sync_vector().unwrap()).unwrap();
+        b.sync_apply(&from_a, T0 + 30).unwrap();
+        (a, b, tmp)
+    }
+
+    fn resolve_pair(a: &mut Library, b: &mut Library, now: u64) -> usize {
+        let na = a.sync_needs().unwrap();
+        let nb = b.sync_needs().unwrap();
+        let (sa, ha) = a.sync_resolve_stuck("pc", &na, &nb, now).unwrap();
+        let (sb, hb) = b.sync_resolve_stuck("phone", &nb, &na, now).unwrap();
+        assert_eq!(sa, sb, "обе стороны исключают одни и те же треки");
+        ha + hb
+    }
+
+    #[test]
+    fn stuck_file_with_different_copies_converges_to_one_file() {
+        let (mut a, mut b, _tmp) = stuck_pair("copy-a", "copy-b");
+        assert_eq!(a.sync_needs().unwrap().len(), 1);
+        assert_eq!(b.sync_needs().unwrap().len(), 1);
+        assert_eq!(
+            resolve_pair(&mut a, &mut b, T0 + 40),
+            1,
+            "чинит ровно одно устройство"
+        );
+        sync_pair(&mut a, &mut b, T0 + 50);
+        assert!(a.sync_needs().unwrap().is_empty());
+        assert!(b.sync_needs().unwrap().is_empty());
+        let fa = fs::read(a.root().join("Kadr").join("OST.mp3")).unwrap();
+        let fb = fs::read(b.root().join("Kadr").join("OST.mp3")).unwrap();
+        assert_eq!(fa, fb);
+    }
+
+    #[test]
+    fn stuck_file_with_identical_copies_just_fixes_the_journal() {
+        let (mut a, mut b, _tmp) = stuck_pair("same", "same");
+        assert_eq!(resolve_pair(&mut a, &mut b, T0 + 40), 1);
+        sync_pair(&mut a, &mut b, T0 + 50);
+        assert!(a.sync_needs().unwrap().is_empty());
+        assert!(b.sync_needs().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(b.root().join("Kadr").join("OST.mp3")).unwrap(),
+            "same"
+        );
+    }
+
+    #[test]
+    fn nothing_is_healed_when_nobody_has_a_file() {
+        let (mut a, mut b, _tmp) = stuck_pair("x", "y");
+        fs::remove_file(a.root().join("Kadr").join("OST.mp3")).unwrap();
+        fs::remove_file(b.root().join("Kadr").join("OST.mp3")).unwrap();
+        assert_eq!(resolve_pair(&mut a, &mut b, T0 + 40), 0);
     }
 
     #[test]

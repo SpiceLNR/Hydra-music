@@ -176,8 +176,21 @@ pub fn run_session<H: LibHandle>(
     let remote_batch: SyncBatch = xchg(ch, role, &my_batch)?;
     report.merge = h.with(|l| l.sync_apply(&remote_batch, now_ms()))?;
 
-    let my_needs: Vec<FileNeed> = h.with(|l| l.sync_needs())?;
-    let remote_needs: Vec<FileNeed> = xchg(ch, role, &my_needs)?;
+    let mut my_needs: Vec<FileNeed> = h.with(|l| l.sync_needs())?;
+    let mut remote_needs: Vec<FileNeed> = xchg(ch, role, &my_needs)?;
+    // файл нужен обеим сторонам, а хэш в журнале не совпал ни с чьим: исправляем журнал
+    let peer_id = remote.device_id.clone();
+    let (stuck, healed) =
+        h.with(|l| l.sync_resolve_stuck(&peer_id, &my_needs, &remote_needs, now_ms()))?;
+    if !stuck.is_empty() {
+        my_needs.retain(|n| !stuck.contains(&n.track_id));
+        remote_needs.retain(|n| !stuck.contains(&n.track_id));
+        progress(&format!(
+            "#Файлы, нужные обоим устройствам из-за расхождения хэша: {}; журнал исправил я: {}",
+            stuck.len(),
+            healed
+        ));
+    }
     if !report.merge.trashed_sample.is_empty() {
         progress(&format!(
             "#В корзину из-за чужого удаления, например: {}",
