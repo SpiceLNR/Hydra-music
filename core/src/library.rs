@@ -24,6 +24,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+mod meta;
 mod relocate;
 mod sync;
 pub use sync::{FileNeed, InvPlaylist, InvTrack, Inventory, MergeReport, PlOp, SyncBatch, Vector};
@@ -402,6 +403,7 @@ impl Library {
             payload["sha256"] = json!(sha256_file(&path)?);
         }
         self.record(now_ms, Kind::Edit, track_id, payload)?;
+        let _ = self.write_overrides(false);
         self.resort_playlist(&t.playlist_id, now_ms)?;
         self.write_manifest(&t.playlist_id)?;
         Ok(written)
@@ -456,6 +458,7 @@ impl Library {
             payload["sha256"] = json!(sha256_file(&path)?);
         }
         self.record(now_ms, Kind::Edit, track_id, payload)?;
+        let _ = self.write_overrides(false);
         self.resort_playlist(&t.playlist_id, now_ms)?;
         self.write_manifest(&t.playlist_id)?;
         Ok(written)
@@ -472,6 +475,7 @@ impl Library {
         tags::write_cover(&path, &jpeg, &self.tmp_dir())?;
         let payload = json!({ "sha256": sha256_file(&path)? });
         self.record(now_ms, Kind::Edit, track_id, payload)?;
+        let _ = self.write_overrides(false);
         self.write_manifest(&t.playlist_id)?;
         Ok(())
     }
@@ -836,6 +840,7 @@ impl Library {
         });
 
         // 3. Новые файлы: перемещение (по хэшу) или совсем новый трек
+        let overrides = self.load_overrides();
         for (pid, fname, path) in new_files {
             let sha = sha256_file(&path)?;
             if let Some(pos) = missing.iter().position(|m| m.sha256 == sha) {
@@ -848,7 +853,16 @@ impl Library {
                 report.moved += 1;
             } else {
                 // Теги читаются только здесь, при добавлении.
-                let (title, artist) = read_tags(&path);
+                let (mut title, mut artist) = read_tags(&path);
+                // правка, которую не удалось записать в файл (после переустановки её хранит meta.json)
+                if let Some(o) = overrides.get(&sha) {
+                    if let Some(t) = o.title.as_ref().filter(|t| !t.trim().is_empty()) {
+                        title = Some(t.clone());
+                    }
+                    if let Some(a) = &o.artist {
+                        artist = Some(a.clone()).filter(|a| !a.trim().is_empty());
+                    }
+                }
                 let track_id = Uuid::new_v4().to_string();
                 let key = journal::append_key(&self.conn, &pid)?;
                 let payload = journal::add_payload(
@@ -924,6 +938,7 @@ impl Library {
             self.write_manifest(pid)?;
         }
         self.write_playlist_order()?;
+        let _ = self.write_overrides(true);
         Ok(report)
     }
 

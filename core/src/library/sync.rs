@@ -583,6 +583,7 @@ impl Library {
             let _ = self.write_manifest(&pid);
         }
         self.write_playlist_order()?;
+        let _ = self.write_overrides(false);
         report.pending_files = self.pending_ids()?.len();
         Ok(report)
     }
