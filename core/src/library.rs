@@ -205,6 +205,12 @@ impl Library {
         use lofty::prelude::*;
         let t = journal::get_track(&self.conn, track_id)?
             .ok_or_else(|| Error::Invalid(format!("track {track_id} not found")))?;
+        // обложка вне файла (для форматов без тегов) главнее
+        if let Some(c) = self.track_cover(track_id)? {
+            if let Some(bytes) = self.cover_file(&c).and_then(|p| fs::read(p).ok()) {
+                return Ok(Some(("image/jpeg".to_string(), bytes)));
+            }
+        }
         let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
         let Ok(tagged) = lofty::read_from_path(&path) else {
             return Ok(None);
@@ -472,8 +478,17 @@ impl Library {
             return Err(Error::Invalid("файла трека нет на диске".into()));
         }
         let jpeg = tags::prepare_cover(image_path)?;
-        tags::write_cover(&path, &jpeg, &self.tmp_dir())?;
-        let payload = json!({ "sha256": sha256_file(&path)? });
+        let payload = if tags::write_cover(&path, &jpeg, &self.tmp_dir()).is_ok() {
+            let mut p = json!({ "sha256": sha256_file(&path)? });
+            if self.track_cover(track_id)?.is_some() {
+                p["cover"] = json!(""); // прежняя картинка рядом с музыкой больше не нужна
+            }
+            p
+        } else {
+            // формат не принимает обложку: картинка лежит рядом с музыкой и едет на
+            // другие устройства отдельно
+            json!({ "cover": self.store_cover(&jpeg)? })
+        };
         self.record(now_ms, Kind::Edit, track_id, payload)?;
         let _ = self.write_overrides(false);
         self.write_manifest(&t.playlist_id)?;
@@ -874,6 +889,16 @@ impl Library {
                     &key,
                 );
                 self.record(now_ms, Kind::Add, &track_id, payload)?;
+                // картинка вне файла (после переустановки её хранит .hydra/covers)
+                if let Some(c) = overrides
+                    .get(&sha)
+                    .and_then(|o| o.cover.clone())
+                    .filter(|c| !c.is_empty())
+                {
+                    if self.cover_file(&c).is_some_and(|p| p.is_file()) {
+                        self.record(now_ms, Kind::Edit, &track_id, json!({ "cover": c }))?;
+                    }
+                }
                 report.added += 1;
             }
         }

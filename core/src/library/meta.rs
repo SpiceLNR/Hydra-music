@@ -5,6 +5,10 @@
 //! файла (сканирование после переустановки) запись по хэшу применяется вместо тегов.
 //! Между устройствами правки и так ездят в журнале: `meta.json` нужен только для
 //! восстановления.
+//!
+//! Так же устроена обложка для файлов, в которые её не встроить: картинка (jpeg) лежит в
+//! `.hydra/covers/<хэш картинки>.jpg`, в журнал уходит правка `{"cover": "<хэш>"}`, а сама
+//! картинка ездит между устройствами тем же каналом, что и файлы (как «файл» `cover:<хэш>`).
 
 use super::*;
 use serde::Deserialize;
@@ -19,6 +23,9 @@ pub struct TagOverride {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artist: Option<String>,
+    /// Хэш картинки в `.hydra/covers`; пусто: обложка внутри файла.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -30,6 +37,84 @@ struct MetaFile {
 impl Library {
     fn meta_path(&self) -> PathBuf {
         self.root.join(INTERNAL_DIR).join(META_FILE)
+    }
+
+    pub(super) fn covers_dir(&self) -> PathBuf {
+        self.root.join(INTERNAL_DIR).join("covers")
+    }
+
+    /// Файл картинки по её хэшу. Хэш обязан быть 64 шестнадцатеричными знаками: он попадает
+    /// в путь, а приходит и с других устройств.
+    pub(super) fn cover_file(&self, sha: &str) -> Option<PathBuf> {
+        if sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            Some(
+                self.covers_dir()
+                    .join(format!("{}.jpg", sha.to_ascii_lowercase())),
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Кладёт картинку в `.hydra/covers` и возвращает её хэш.
+    pub(super) fn store_cover(&self, jpeg: &[u8]) -> Result<String> {
+        let sha: String = Sha256::digest(jpeg)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let path = self
+            .cover_file(&sha)
+            .ok_or_else(|| Error::Invalid("хэш картинки".into()))?;
+        fs::create_dir_all(self.covers_dir())?;
+        if !path.is_file() {
+            fs::write(&path, jpeg)?;
+        }
+        Ok(sha)
+    }
+
+    /// Хэш картинки-обложки трека из последней правки с полем `cover` (пусто: обложка в файле).
+    pub(super) fn track_cover(&self, track_id: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload FROM ops WHERE kind = 'edit' AND track_id = ?1 ORDER BY hlc DESC",
+        )?;
+        let rows = stmt
+            .query_map([track_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for payload in rows {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                continue;
+            };
+            if let Some(c) = v.get("cover").and_then(|x| x.as_str()) {
+                return Ok(Some(c.to_string()).filter(|c| !c.is_empty()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Картинки, которых не хватает на этом устройстве (хэш картинки), для живых треков.
+    pub(super) fn missing_covers(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT o.track_id FROM ops o JOIN tracks t ON t.track_id = o.track_id
+             WHERE o.kind = 'edit' AND t.deleted = 0 AND o.payload LIKE '%\"cover\"%'
+             ORDER BY o.track_id",
+        )?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut out: Vec<String> = Vec::new();
+        for id in ids {
+            let Some(c) = self.track_cover(&id)? else {
+                continue;
+            };
+            let Some(path) = self.cover_file(&c) else {
+                continue;
+            };
+            if !path.is_file() && !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        Ok(out)
     }
 
     /// Сохранённые правки (хэш файла -> правка). Нет файла или он испорчен: пусто.
@@ -50,8 +135,8 @@ impl Library {
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         drop(stmt);
-        // какие поля трека правились хоть раз: (название, исполнитель)
-        let mut flags: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+        // какие поля трека правились хоть раз: (название, исполнитель, обложка)
+        let mut flags: BTreeMap<String, (bool, bool, bool)> = BTreeMap::new();
         for (id, payload) in rows {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else {
                 continue;
@@ -63,10 +148,13 @@ impl Library {
             if v.get("artist").and_then(|x| x.as_str()).is_some() {
                 e.1 = true;
             }
+            if v.get("cover").and_then(|x| x.as_str()).is_some() {
+                e.2 = true;
+            }
         }
         let mut out = BTreeMap::new();
-        for (id, (title_edited, artist_edited)) in flags {
-            if !title_edited && !artist_edited {
+        for (id, (title_edited, artist_edited, cover_edited)) in flags {
+            if !title_edited && !artist_edited && !cover_edited {
                 continue;
             }
             let Some(st) = journal::get_track(&self.conn, &id)? else {
@@ -85,6 +173,11 @@ impl Library {
                     },
                     artist: if artist_edited {
                         Some(st.artist.clone().unwrap_or_default())
+                    } else {
+                        None
+                    },
+                    cover: if cover_edited {
+                        Some(self.track_cover(&id)?.unwrap_or_default())
                     } else {
                         None
                     },
@@ -107,6 +200,9 @@ impl Library {
             }
             if fresh.artist.is_some() {
                 e.artist = fresh.artist;
+            }
+            if fresh.cover.is_some() {
+                e.cover = fresh.cover;
             }
         }
         if prune {
@@ -209,6 +305,45 @@ mod tests {
         let a = find(&lib3, "a.mp3");
         assert_eq!(a.title, "Новое имя");
         assert_eq!(a.artist.as_deref(), Some("Исполнитель"));
+    }
+
+    fn png(dir: &Path, name: &str, shade: u8) -> PathBuf {
+        let p = dir.join(name);
+        image::RgbImage::from_pixel(8, 8, image::Rgb([shade, 30, 30]))
+            .save(&p)
+            .unwrap();
+        p
+    }
+
+    #[test]
+    fn cover_for_a_tagless_file_lives_beside_the_music_and_survives_reinstall() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut lib = open(&tmp, "a.db", T0);
+        put(&lib, "Rock", "a.mp3", "aaa");
+        lib.scan(T0 + 1).unwrap();
+        let id = find(&lib, "a.mp3").track_id;
+        assert!(lib.cover(&id).unwrap().is_none());
+        let pic = png(tmp.path(), "c.png", 200);
+        lib.set_cover(&id, &pic, T0 + 2).unwrap();
+        let (_, bytes) = lib.cover(&id).unwrap().expect("обложка есть");
+        assert!(!bytes.is_empty());
+        let files = fs::read_dir(tmp.path().join("Hydra/.hydra/covers"))
+            .unwrap()
+            .count();
+        assert_eq!(files, 1);
+        // заменили: новая картинка главнее старой
+        let pic2 = png(tmp.path(), "c2.png", 10);
+        lib.set_cover(&id, &pic2, T0 + 3).unwrap();
+        let (_, bytes2) = lib.cover(&id).unwrap().unwrap();
+        assert_ne!(bytes, bytes2);
+        drop(lib);
+
+        // «переустановка»
+        let mut lib2 = open(&tmp, "fresh.db", T0 + 100);
+        lib2.scan(T0 + 101).unwrap();
+        let id2 = find(&lib2, "a.mp3").track_id;
+        let (_, back) = lib2.cover(&id2).unwrap().expect("обложка вернулась");
+        assert_eq!(back, bytes2);
     }
 
     #[test]

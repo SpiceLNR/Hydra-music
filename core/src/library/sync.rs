@@ -844,6 +844,16 @@ impl Library {
                 }
             }
         }
+        // картинки-обложки, которых нет на этом устройстве (идут как «файлы» cover:<хэш>)
+        for c in self.missing_covers()? {
+            rows.push(FileNeed {
+                track_id: format!("cover:{c}"),
+                sha256: c.clone(),
+                file_name: format!("{c}.jpg"),
+                playlist: "обложки".to_string(),
+                have_sha: String::new(),
+            });
+        }
         Ok(rows)
     }
 
@@ -897,6 +907,15 @@ impl Library {
     /// Файл трека для отправки другому устройству: путь и хэш. `None`, если файла у нас нет
     /// (или он сам ещё не получен).
     pub fn sync_file_for(&self, track_id: &str) -> Result<Option<(PathBuf, String)>> {
+        if let Some(c) = track_id.strip_prefix("cover:") {
+            return Ok(match self.cover_file(c) {
+                Some(p) if p.is_file() => {
+                    let sha = sha256_file(&p)?;
+                    Some((p, sha))
+                }
+                _ => None,
+            });
+        }
         let Some(t) = journal::get_track(&self.conn, track_id)? else {
             return Ok(None);
         };
@@ -937,7 +956,8 @@ impl Library {
     pub fn sync_tmp_path(&self, track_id: &str) -> Result<PathBuf> {
         let dir = self.tmp_dir();
         fs::create_dir_all(&dir)?;
-        Ok(dir.join(format!("{track_id}.part")))
+        // «:» в имени файла недопустим на Windows (у картинок id вида cover:<хэш>)
+        Ok(dir.join(format!("{}.part", track_id.replace(':', "_"))))
     }
 
     /// Хэш, записанный в журнале для трека (для диагностики отклонённых файлов).
@@ -948,6 +968,22 @@ impl Library {
     /// Принимает скачанный файл: проверяет хэш и одним действием переносит в плейлист.
     /// Возвращает `false`, если файл не подошёл (его нужно запросить заново позже).
     pub fn sync_store_file(&mut self, track_id: &str, tmp: &Path, sha256: &str) -> Result<bool> {
+        if let Some(c) = track_id.strip_prefix("cover:") {
+            let actual = sha256_file(tmp)?;
+            let dest = self.cover_file(c);
+            let Some(dest) = dest.filter(|_| actual == sha256 && actual.eq_ignore_ascii_case(c))
+            else {
+                let _ = fs::remove_file(tmp);
+                return Ok(false);
+            };
+            fs::create_dir_all(self.covers_dir())?;
+            if dest.exists() {
+                let _ = fs::remove_file(tmp);
+            } else {
+                fs::rename(tmp, &dest)?;
+            }
+            return Ok(true);
+        }
         let Some(t) = journal::get_track(&self.conn, track_id)? else {
             let _ = fs::remove_file(tmp);
             return Ok(false);
@@ -1181,6 +1217,35 @@ mod tests {
         );
         // здоровый файл отдаётся сразу
         assert!(a.sync_file_or_heal(&id, T0 + 60).unwrap().0.is_some());
+    }
+
+    #[test]
+    fn cover_of_a_tagless_file_travels_to_the_other_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut a = device(&tmp, "phone");
+        let mut b = device(&tmp, "pc");
+        put(&a, "Rock", "a.mp3", "aaa");
+        a.scan(T0 + 1).unwrap();
+        sync_pair(&mut a, &mut b, T0 + 10);
+        let rock = a.playlists().unwrap()[0].playlist_id.clone();
+        let id = a.tracks(&rock).unwrap()[0].track_id.clone();
+
+        let pic = tmp.path().join("c.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([200, 30, 30]))
+            .save(&pic)
+            .unwrap();
+        a.set_cover(&id, &pic, T0 + 20).unwrap();
+        let (_, from_a) = a.cover(&id).unwrap().unwrap();
+        assert!(b.cover(&id).unwrap().is_none());
+
+        sync_pair(&mut a, &mut b, T0 + 30);
+        let (_, on_b) = b.cover(&id).unwrap().expect("обложка доехала");
+        assert_eq!(on_b, from_a);
+        assert!(a.sync_needs().unwrap().is_empty());
+        assert!(b.sync_needs().unwrap().is_empty());
+        // повторная синхронизация ничего не просит заново
+        sync_pair(&mut a, &mut b, T0 + 40);
+        assert!(b.sync_needs().unwrap().is_empty());
     }
 
     #[test]
