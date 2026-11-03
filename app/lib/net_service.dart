@@ -307,6 +307,35 @@ class NetService extends ChangeNotifier {
     }
   }
 
+  Timer? _soonTimer;
+
+  /// Свои правки (обложка, название, удаление, перенос) нужно доставить быстро, а не ждать
+  /// следующего обхода раз в 10 минут. Серия правок объединяется: синхронизация стартует
+  /// через несколько секунд после последней.
+  void syncSoon() {
+    if (!autoSync || !started) return;
+    _soonTimer?.cancel();
+    _soonTimer = Timer(const Duration(seconds: 8), () => unawaited(_syncSoonRun(0)));
+  }
+
+  Future<void> _syncSoonRun(int attempt) async {
+    if (!autoSync || !started) return;
+    if (busy) {
+      // идёт другая синхронизация: попробуем чуть позже
+      if (attempt < 6) {
+        _soonTimer = Timer(const Duration(seconds: 10), () => unawaited(_syncSoonRun(attempt + 1)));
+      }
+      return;
+    }
+    if (!await _chargingOk()) return;
+    for (final d in devices) {
+      if (!d.online) continue;
+      _lastAuto[d.id] = DateTime.now();
+      await sync(d, quiet: true);
+      return; // по одному устройству за раз, остальные подхватит обычный обход
+    }
+  }
+
   /// Устройство только что появилось в сети: синхронизируемся с ним сразу.
   Future<void> _autoSyncSoon(DeviceInfo d) async {
     await Future<void>.delayed(const Duration(seconds: 2));

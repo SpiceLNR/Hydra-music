@@ -241,18 +241,21 @@ class LibraryController extends ChangeNotifier {
 
   Future<void> createPlaylist(String name) async {
     await Core.call('create_playlist', {'name': name});
+    hydraNet.syncSoon();
     await reloadPlaylists();
   }
 
   /// Переименовывает плейлист (папка на диске тоже переименовывается).
   Future<void> renamePlaylist(String playlistId, String name) async {
     await Core.call('rename_playlist', {'playlist_id': playlistId, 'name': name});
+    hydraNet.syncSoon();
     await reloadPlaylists();
   }
 
   /// Удаляет пустой плейлист; ядро откажет, если в нём есть треки.
   Future<void> deletePlaylist(String playlistId) async {
     await Core.call('delete_playlist', {'playlist_id': playlistId});
+    hydraNet.syncSoon();
     await reloadPlaylists();
   }
 
@@ -264,6 +267,7 @@ class LibraryController extends ChangeNotifier {
   /// Меняет название трека. Возвращает true, если оно записано и в теги файла.
   Future<bool> renameTrack(String trackId, String title) async {
     final r = await Core.call('rename_track', {'track_id': trackId, 'title': title});
+    hydraNet.syncSoon();
     return r is Map<String, dynamic> && r['tag_written'] == true;
   }
 
@@ -272,6 +276,7 @@ class LibraryController extends ChangeNotifier {
   Future<bool> editTrack(String trackId, String title, String artist) async {
     final r = await Core.call(
         'edit_track', {'track_id': trackId, 'title': title, 'artist': artist});
+    hydraNet.syncSoon();
     tracksRevision++;
     notifyListeners();
     return r is Map<String, dynamic> && r['tag_written'] == true;
@@ -280,6 +285,7 @@ class LibraryController extends ChangeNotifier {
   /// Заменяет обложку: картинка встраивается в сам аудиофайл.
   Future<void> setCover(String trackId, String imagePath) async {
     await Core.call('set_cover', {'track_id': trackId, 'image_path': imagePath});
+    hydraNet.syncSoon();
     _covers.remove(trackId);
     tracksRevision++;
     notifyListeners();
@@ -293,16 +299,19 @@ class LibraryController extends ChangeNotifier {
 
   Future<void> moveTrack(String trackId, String toPlaylistId) async {
     await Core.call('move_track', {'track_id': trackId, 'to_playlist_id': toPlaylistId});
+    hydraNet.syncSoon();
     await reloadPlaylists();
   }
 
   Future<void> deleteTrack(String trackId) async {
     await Core.call('delete_track', {'track_id': trackId});
+    hydraNet.syncSoon();
     await reloadPlaylists();
   }
 
   Future<void> restoreTrack(String trackId) async {
     await Core.call('restore_track', {'track_id': trackId});
+    hydraNet.syncSoon();
     await reloadPlaylists();
   }
 
