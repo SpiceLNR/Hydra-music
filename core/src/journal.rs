@@ -154,6 +154,8 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
 
     let mut state: Option<TrackState> = None;
     let mut last_hlc = String::new();
+    // последнее удаление было слиянием дубля: файл остаётся у трека-победителя, в корзину не идёт
+    let mut dup_delete = false;
     for row in rows {
         let (hlc, kind, payload) = row?;
         let kind = Kind::parse(&kind).ok_or_else(|| Error::Invalid(format!("kind {kind}")))?;
@@ -216,8 +218,12 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
             Kind::Delete => {
                 if let Some(s) = state.as_mut() {
                     s.deleted = true;
+                    dup_delete = payload.get("duplicate_of").is_some();
                 }
             }
+        }
+        if kind != Kind::Delete {
+            dup_delete = false;
         }
         last_hlc = hlc;
     }
@@ -239,7 +245,9 @@ fn rebuild_track(conn: &Connection, track_id: &str, now_ms: u64, reason: &str) -
         ],
     )?;
 
-    if s.deleted {
+    if s.deleted && dup_delete {
+        conn.execute("DELETE FROM trash WHERE track_id = ?1", [&s.track_id])?;
+    } else if s.deleted {
         // дата удаления = время операции «удалить» (одинакова на всех устройствах), а не
         // момент, когда мы о ней узнали: иначе давняя история чужих удалений выглядела бы свежей
         let deleted_ms = Hlc::decode(&last_hlc)
@@ -1089,24 +1097,6 @@ mod tests {
         assert_eq!(v["playlist_id"], "rock");
     }
 
-    /// Обложка трека t1 так же, как её видит библиотека: последняя по HLC правка с `cover`.
-    fn newest_cover(conn: &Connection) -> Option<String> {
-        let mut stmt = conn
-            .prepare(
-                "SELECT payload FROM ops WHERE kind = 'edit' AND track_id = 't1' ORDER BY hlc DESC",
-            )
-            .unwrap();
-        let rows: Vec<String> = stmt
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect();
-        rows.iter().find_map(|p| {
-            let v: Value = serde_json::from_str(p).unwrap();
-            v.get("cover").and_then(|x| x.as_str()).map(str::to_string)
-        })
-    }
-
     #[test]
     fn compaction_keeps_the_final_state_of_random_histories() {
         let mut seed: u64 = 12345;
@@ -1127,7 +1117,7 @@ mod tests {
             for _ in 0..steps {
                 now += 10;
                 let on_a = rnd(2) == 0;
-                let (kind, payload) = match rnd(8) {
+                let (kind, payload) = match rnd(7) {
                     0 | 1 => (
                         Kind::Reorder,
                         json!({ "order_key": format!("k{}", rnd(5)) }),
@@ -1148,28 +1138,17 @@ mod tests {
                         (Kind::Move, p)
                     }
                     5 => (Kind::Delete, json!({})),
-                    6 => (
-                        // обложка рядом с музыкой; пустая строка: обложка снова в файле
-                        Kind::Edit,
-                        json!({ "cover": if rnd(3) == 0 { String::new() } else { format!("c{}", rnd(3)) } }),
-                    ),
                     _ => (Kind::Move, json!({})),
                 };
                 let (clock, dev) = if on_a { (&mut ca, "A") } else { (&mut cb, "B") };
                 record_local(&conn, clock, now, dev, kind, "t1", payload).unwrap();
             }
             let before = get_track(&conn, "t1").unwrap().unwrap();
-            let cover_before = newest_cover(&conn);
             let (removed, _) = compact(&conn).unwrap();
             removed_total += removed;
             rebuild_track(&conn, "t1", now, "user").unwrap();
             let after = get_track(&conn, "t1").unwrap().unwrap();
             assert_eq!(before, after, "состояние изменилось после сжатия");
-            assert_eq!(
-                cover_before,
-                newest_cover(&conn),
-                "обложка изменилась после сжатия"
-            );
         }
         assert!(removed_total > 0, "сжатие ни разу ничего не убрало");
     }

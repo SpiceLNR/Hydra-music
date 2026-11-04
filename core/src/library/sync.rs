@@ -610,6 +610,10 @@ impl Library {
         let Some(src) = candidates.into_iter().find(|c| c.is_file()) else {
             return Ok(false);
         };
+        // файл нужен другой живой записи — не уносим его в корзину
+        if self.shared_file_user(now)?.is_some() {
+            return Ok(false);
+        }
         let tdir = self.trash_dir(&now.track_id);
         fs::create_dir_all(&tdir)?;
         let target = tdir.join(&now.file_name);
@@ -1544,5 +1548,71 @@ mod tests {
             .unwrap());
         assert_eq!(b.sync_needs().unwrap().len(), 1, "файл всё ещё нужен");
         assert!(!b.root().join("Rock").join("a.mp3").exists());
+    }
+
+    /// Две живые записи с одним файлом и хэшем сливаются в одну, файл остаётся на месте.
+    #[test]
+    fn duplicates_merge_without_touching_the_file() {
+        let tmp = TempDir::new().unwrap();
+        let mut a = device(&tmp, "a");
+        put(&a, "Mix", "one.mp3", "ONE");
+        a.scan(T0).unwrap();
+        let pid = a.playlists().unwrap()[0].playlist_id.clone();
+        let orig = a.tracks(&pid).unwrap()[0].clone();
+        let sha = journal::get_track(&a.conn, &orig.track_id)
+            .unwrap()
+            .unwrap()
+            .sha256;
+        a.record(
+            T0 + 1,
+            Kind::Add,
+            "zzzz-dup",
+            json!({
+                "playlist_id": pid,
+                "file_name": orig.file_name,
+                "sha256": sha,
+                "order_key": "zz",
+            }),
+        )
+        .unwrap();
+        assert_eq!(a.tracks(&pid).unwrap().len(), 2);
+        a.scan(T0 + 2).unwrap();
+        let left = a.tracks(&pid).unwrap();
+        assert_eq!(left.len(), 1);
+        assert!(a.root().join("Mix").join("one.mp3").is_file());
+        assert!(a.trash_items().unwrap().is_empty());
+        // повторный скан ничего не ломает
+        a.scan(T0 + 3).unwrap();
+        assert_eq!(a.tracks(&pid).unwrap().len(), 1);
+    }
+
+    /// Удаление одной из двух записей с общим файлом не уносит файл в корзину.
+    #[test]
+    fn deleting_one_of_shared_file_keeps_the_file() {
+        let tmp = TempDir::new().unwrap();
+        let mut a = device(&tmp, "a");
+        put(&a, "Mix", "one.mp3", "ONE");
+        a.scan(T0).unwrap();
+        let pid = a.playlists().unwrap()[0].playlist_id.clone();
+        let orig = a.tracks(&pid).unwrap()[0].clone();
+        let sha = journal::get_track(&a.conn, &orig.track_id)
+            .unwrap()
+            .unwrap()
+            .sha256;
+        a.record(
+            T0 + 1,
+            Kind::Add,
+            "zzzz-dup",
+            json!({
+                "playlist_id": pid,
+                "file_name": orig.file_name,
+                "sha256": "other-hash",
+                "order_key": "zz",
+            }),
+        )
+        .unwrap();
+        a.delete_track("zzzz-dup", T0 + 2).unwrap();
+        assert!(a.root().join("Mix").join("one.mp3").is_file());
+        assert_eq!(a.tracks(&pid).unwrap().len(), 1);
     }
 }

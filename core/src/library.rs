@@ -523,6 +523,17 @@ impl Library {
     pub fn delete_track(&mut self, track_id: &str, now_ms: u64) -> Result<()> {
         let t = self.live_track(track_id)?;
         let src = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
+        // файл делят две записи: удаляем только запись, файл нужен второй
+        if let Some(other) = self.shared_file_user(&t)? {
+            self.record(
+                now_ms,
+                Kind::Delete,
+                track_id,
+                json!({ "duplicate_of": other }),
+            )?;
+            self.write_manifest(&t.playlist_id)?;
+            return Ok(());
+        }
         let tdir = self.trash_dir(track_id);
         fs::create_dir_all(&tdir)?;
         if src.exists() {
@@ -963,6 +974,11 @@ impl Library {
             self.write_manifest(pid)?;
         }
         self.write_playlist_order()?;
+        if self.merge_duplicates(now_ms)? > 0 {
+            for (pid, _) in &dirs {
+                self.write_manifest(pid)?;
+            }
+        }
         let _ = self.write_overrides(true);
         Ok(report)
     }
@@ -1024,6 +1040,62 @@ impl Library {
             payload,
         )?;
         Ok(())
+    }
+
+    /// Другая живая запись того же плейлиста с тем же файлом (имя без учёта регистра).
+    pub(crate) fn shared_file_user(&self, t: &TrackState) -> Result<Option<String>> {
+        let key = naming::fold_key(&t.file_name);
+        Ok(journal::live_tracks(&self.conn)?
+            .into_iter()
+            .find(|o| {
+                o.track_id != t.track_id
+                    && o.playlist_id == t.playlist_id
+                    && naming::fold_key(&o.file_name) == key
+            })
+            .map(|o| o.track_id))
+    }
+
+    /// Сливает дубли: живые записи одного плейлиста с одним файлом и одним хэшем.
+    /// Побеждает запись с названием, иначе с меньшим id (на всех устройствах одинаково).
+    /// Файл не трогается. Возвращает число слитых записей.
+    pub(crate) fn merge_duplicates(&mut self, now_ms: u64) -> Result<usize> {
+        let mut groups: BTreeMap<(String, String, String), Vec<TrackState>> = BTreeMap::new();
+        for t in journal::live_tracks(&self.conn)? {
+            if t.sha256.is_empty() {
+                continue;
+            }
+            groups
+                .entry((
+                    t.playlist_id.clone(),
+                    naming::fold_key(&t.file_name),
+                    t.sha256.clone(),
+                ))
+                .or_default()
+                .push(t);
+        }
+        let mut merged = 0;
+        for (_, mut g) in groups {
+            if g.len() < 2 {
+                continue;
+            }
+            g.sort_by_key(|t| {
+                (
+                    t.title.as_deref().map_or(true, |x| x.trim().is_empty()),
+                    t.track_id.clone(),
+                )
+            });
+            let winner = g[0].track_id.clone();
+            for loser in &g[1..] {
+                self.record(
+                    now_ms,
+                    Kind::Delete,
+                    &loser.track_id,
+                    json!({ "duplicate_of": winner }),
+                )?;
+                merged += 1;
+            }
+        }
+        Ok(merged)
     }
 
     fn live_track(&self, track_id: &str) -> Result<TrackState> {

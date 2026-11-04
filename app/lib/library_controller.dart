@@ -186,6 +186,9 @@ class LibraryController extends ChangeNotifier {
       } on CoreException catch (e) {
         notice = e.message;
       }
+      // обложки могли прийти с другого устройства — забываем «обложки нет»
+      _covers.clear();
+      tracksRevision++;
       await reloadPlaylists();
       await _loadHeld();
       error = null;
