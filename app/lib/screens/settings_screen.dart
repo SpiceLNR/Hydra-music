@@ -313,18 +313,9 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                   listenable: DesktopSettings.instance,
                   builder: (context, _) {
                     final s = DesktopSettings.instance;
-                    Widget side(String label, bool right) {
-                      final selected = s.dockRight == right;
-                      void choose() {
-                        s.setDockRight(right);
-                        DockController.instance.reapply();
-                      }
-
-                      return Expanded(
-                        child: selected
-                            ? ElevatedButton(onPressed: choose, child: Text(label))
-                            : OutlinedButton(onPressed: choose, child: Text(label)),
-                      );
+                    void choose(bool right) {
+                      s.setDockRight(right);
+                      DockController.instance.reapply();
                     }
 
                     return Column(
@@ -336,19 +327,16 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                             children: [
                               const Expanded(
                                   child: Text('Сторона', style: TextStyle(fontSize: 18))),
-                              SizedBox(
-                                width: 200,
-                                child: Row(children: [
-                                  side('Слева', false),
-                                  const SizedBox(width: 8),
-                                  side('Справа', true),
-                                ]),
+                              _Segmented(
+                                labels: const ['Слева', 'Справа'],
+                                selected: s.dockRight ? 1 : 0,
+                                onSelect: (i) => choose(i == 1),
                               ),
                             ],
                           ),
                         ),
                         MetroSwitchRow(
-                          title: 'Сворачивать при клике вне окна',
+                          title: 'Сворачивать при клике мимо',
                           value: s.autoCollapse,
                           onChanged: s.setAutoCollapse,
                         ),
@@ -432,6 +420,50 @@ class _ValueRow extends StatelessWidget {
             const Icon(Icons.chevron_right, color: Metro.textDim),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Переключатель из нескольких одинаковых половин: выбранная залита зелёным.
+/// Все части одного размера, подписи в одну строку (в узком окне уменьшаются).
+class _Segmented extends StatelessWidget {
+  const _Segmented({required this.labels, required this.selected, required this.onSelect});
+
+  final List<String> labels;
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(border: Border.all(color: Metro.green, width: 2)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < labels.length; i++)
+            InkWell(
+              onTap: () => onSelect(i),
+              child: Container(
+                width: 84,
+                height: 34,
+                color: i == selected ? Metro.green : Colors.transparent,
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    labels[i],
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: i == selected ? Colors.white : Metro.textDim,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
