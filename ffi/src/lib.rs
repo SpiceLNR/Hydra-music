@@ -395,7 +395,7 @@ fn dispatch(request: &str) -> Result<Value, String> {
 }
 
 /// Запуск процесса, который переживёт приложение (скрипт установки обновления).
-/// `{"program": "...", "args": ["..."]}` -> `{"pid": N}`.
+/// `{"program": "...", "args": ["..."], "cwd": "..."}` -> `{"pid": N}` (`cwd` необязателен).
 ///
 /// На Windows процесс запускается со скрытой консолью (`CREATE_NO_WINDOW`), а не
 /// без консоли вовсе: `Process.start(mode: detached)` в Dart даёт `DETACHED_PROCESS`,
@@ -412,6 +412,11 @@ fn spawn_hidden(args: &Value) -> Result<Value, String> {
         _ => return Err("args: нужен список строк".to_string()),
     };
     let mut cmd = Command::new(&program);
+    // Текущая папка задаётся явно: унаследованная (папка программы) держала бы её,
+    // и скрипт обновления не смог бы её переименовать.
+    if let Some(dir) = args["cwd"].as_str() {
+        cmd.current_dir(dir);
+    }
     cmd.args(&list)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -514,6 +519,38 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert!(out.exists(), "запущенный процесс не выполнился");
+    }
+
+    /// Текущая папка запущенного процесса - та, что передана в `cwd`, а не папка
+    /// приложения (иначе папку программы нельзя переименовать при обновлении).
+    #[test]
+    fn spawn_hidden_uses_given_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (program, args) = if cfg!(windows) {
+            (
+                "powershell.exe",
+                json!([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "[IO.File]::WriteAllText((Join-Path ([Environment]::CurrentDirectory) 'cwd.txt'), 'ok')",
+                ]),
+            )
+        } else {
+            ("sh", json!(["-c", "echo ok > cwd.txt"]))
+        };
+        ok(
+            "spawn_hidden",
+            json!({ "program": program, "args": args, "cwd": tmp.path().to_string_lossy() }),
+        );
+        let out = tmp.path().join("cwd.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !out.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(out.exists(), "процесс запущен не в переданной папке");
     }
 
     #[test]

@@ -229,7 +229,12 @@ class UpdateService extends ChangeNotifier {
       if (info?.version == i.version && info?.sha256 == i.sha256) return;
       info = i;
       final part = File(_partPath(i));
-      received = await part.exists() ? await part.length() : 0;
+      final whole = File(_zipPath(i));
+      received = await part.exists()
+          ? await part.length()
+          : await whole.exists()
+              ? await whole.length()
+              : 0;
       _set(UpdateState.available);
     } catch (_) {
       // нет сети или GitHub недоступен: проверим позже
@@ -252,6 +257,9 @@ class UpdateService extends ChangeNotifier {
       await _updateDir.create(recursive: true);
       await _dropOtherVersions(i.version);
       final part = File(_partPath(i));
+      // архив уже скачан (например, прошлая установка не удалась): проверим и его
+      final whole = File(_zipPath(i));
+      if (!await part.exists() && await whole.exists()) await whole.rename(part.path);
       var from = await part.exists() ? await part.length() : 0;
       if (from > i.size) {
         await part.delete();
@@ -429,9 +437,12 @@ class UpdateService extends ChangeNotifier {
       await script.writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(_script())]);
       // Запуск через ядро (CREATE_NO_WINDOW): Process.start(mode: detached) даёт
       // DETACHED_PROCESS, и PowerShell 5.1 с ним молча завершается, не выполнив скрипт.
+      // Текущая папка - app.update: унаследованная папка программы была бы занята
+      // самим скриптом, и переименовать её не получилось бы.
       await Core.call('spawn_hidden', {
         'program': 'powershell.exe',
         'args': ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script.path],
+        'cwd': _updateDir.path,
       });
       exit(0);
     } catch (e) {
@@ -464,16 +475,21 @@ class UpdateService extends ChangeNotifier {
     final app = _appDir.path;
     final appLeaf = app.split(_sep).last;
     final prevLeaf = _prevPath.split(_sep).last;
+    final oldLeaf = '$prevLeaf.old';
     return '''
 \$ErrorActionPreference = 'Stop'
 \$app  = ${_psQuote(app)}
 \$new  = ${_psQuote(_newPath)}
 \$prev = ${_psQuote(_prevPath)}
+\$old  = ${_psQuote('$_prevPath.old')}
+\$home_ = ${_psQuote(_appDir.parent.path)}
 \$exe  = ${_psQuote(_exeName)}
 \$log  = ${_psQuote('${_updateDir.path}${_sep}install.log')}
 function Log(\$m) {
   try { Add-Content -LiteralPath \$log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), \$m) -Encoding UTF8 } catch { }
 }
+# своя текущая папка не должна быть внутри app: иначе её нельзя переименовать
+try { [System.IO.Directory]::SetCurrentDirectory(\$env:TEMP); Set-Location -LiteralPath \$env:TEMP } catch { }
 Log 'Обновление $kVersion -> ${info?.version ?? '?'}: жду закрытия программы ($pid)'
 try { Wait-Process -Id $pid -Timeout 30 -ErrorAction Stop } catch { }
 Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
@@ -481,26 +497,49 @@ Start-Sleep -Milliseconds 500
 \$ok = \$false
 for (\$i = 1; \$i -le 10 -and -not \$ok; \$i++) {
   try {
-    # прошлая попытка могла оставить только app.prev: сначала вернуть его на место
+    # прошлая попытка могла оставить app только в виде app.prev: вернуть на место
     if (-not (Test-Path -LiteralPath \$app) -and (Test-Path -LiteralPath \$prev)) {
       Rename-Item -LiteralPath \$prev -NewName ${_psQuote(appLeaf)}
     }
-    if (Test-Path -LiteralPath \$prev) { Remove-Item -LiteralPath \$prev -Recurse -Force }
-    Rename-Item -LiteralPath \$app -NewName ${_psQuote(prevLeaf)}
+    if (-not (Test-Path -LiteralPath \$app)) { throw 'нет папки программы' }
+    if (-not (Test-Path -LiteralPath \$new)) { throw 'нет распакованной новой версии' }
+    if (Test-Path -LiteralPath \$old) { Remove-Item -LiteralPath \$old -Recurse -Force }
+    # прежняя резервная копия убирается только после удачной замены
+    if (Test-Path -LiteralPath \$prev) { Rename-Item -LiteralPath \$prev -NewName ${_psQuote(oldLeaf)} }
+    try {
+      Rename-Item -LiteralPath \$app -NewName ${_psQuote(prevLeaf)}
+    } catch {
+      if (Test-Path -LiteralPath \$old) { Rename-Item -LiteralPath \$old -NewName ${_psQuote(prevLeaf)} }
+      throw
+    }
     try {
       Rename-Item -LiteralPath \$new -NewName ${_psQuote(appLeaf)}
       \$ok = \$true
     } catch {
       Rename-Item -LiteralPath \$prev -NewName ${_psQuote(appLeaf)}
+      if (Test-Path -LiteralPath \$old) { Rename-Item -LiteralPath \$old -NewName ${_psQuote(prevLeaf)} }
       throw
     }
   } catch {
     Log ("Попытка {0}: {1}" -f \$i, \$_.Exception.Message)
+    if (\$i -eq 1) {
+      # кто держит папку: процессы, запущенные из неё
+      try {
+        Get-CimInstance Win32_Process | Where-Object { \$_.ExecutablePath -and \$_.ExecutablePath.StartsWith(\$app, 'OrdinalIgnoreCase') } |
+          ForEach-Object { Log ("  занято: {0} ({1})" -f \$_.Name, \$_.ProcessId) }
+      } catch { }
+    }
     Start-Sleep -Seconds 1
   }
 }
-if (\$ok) { Log 'Новая версия на месте' } else { Log 'Не удалось заменить папку: запускаю прежнюю версию' }
-Start-Process -FilePath (Join-Path \$app \$exe) -WorkingDirectory \$app
+if (\$ok) {
+  if (Test-Path -LiteralPath \$old) { try { Remove-Item -LiteralPath \$old -Recurse -Force } catch { } }
+  Log 'Новая версия на месте'
+} else {
+  Log 'Не удалось заменить папку: запускаю прежнюю версию'
+}
+# текущая папка программы - на уровень выше app, чтобы не мешать следующему обновлению
+Start-Process -FilePath (Join-Path \$app \$exe) -WorkingDirectory \$home_
 ''';
   }
 
