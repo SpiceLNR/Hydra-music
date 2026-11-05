@@ -1,4 +1,4 @@
-/// Версия приложения. Хронику изменений см. в CHANGELOG.md.
+/// Версия приложения. Хронику изменений см. в CHANGELOG.md (CHANGELOG.ru.md по-русски).
 const String kVersion = '0.34.0';
 
 const String _raw = String.fromEnvironment('HYDRA_BUILD', defaultValue: 'локальная');
