@@ -445,6 +445,9 @@ class NetService extends ChangeNotifier {
       if (_quietRun && coreError.isNotEmpty) _hiddenError = coreError;
       if (coreError.isEmpty) _hiddenError = '';
       error = coreError == _hiddenError ? '' : coreError;
+      // своё имя знает ядро: оно могло быть выбрано раньше и сохранено в identity.json
+      final myName = st['name'] as String?;
+      if (myName != null && myName.isNotEmpty) deviceName = myName;
       endpoint = (st['endpoint'] as String?) ?? '';
       internetError = (st['internet_error'] as String?) ?? '';
       log = (st['log'] as List).cast<String>();
@@ -567,6 +570,20 @@ class NetService extends ChangeNotifier {
       error = e.message;
     }
     await _poll();
+  }
+
+  /// Новое имя этого устройства. Другие устройства увидят его при следующей синхронизации.
+  /// Возвращает текст ошибки или null.
+  Future<String?> setDeviceName(String name) async {
+    if (!started) return 'сеть ещё не запущена';
+    try {
+      final r = await Core.call('net_set_name', {'name': name}) as Map<String, dynamic>;
+      deviceName = (r['name'] as String?) ?? deviceName;
+      notifyListeners();
+      return null;
+    } on CoreException catch (e) {
+      return e.message;
+    }
   }
 
   Future<void> forget(DeviceInfo d) async {

@@ -11,6 +11,30 @@ use std::path::{Path, PathBuf};
 struct KeyFile {
     private: String,
     public: String,
+    /// Имя, выбранное пользователем в «Настройках». Нет поля (старые файлы) -
+    /// используется имя по умолчанию, которое передаёт приложение.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+/// Самое длинное имя устройства (в символах).
+pub const MAX_NAME_CHARS: usize = 40;
+
+/// Приводит имя устройства в порядок: без управляющих символов и лишних пробелов,
+/// не длиннее [`MAX_NAME_CHARS`]. `None`, если ничего не осталось.
+pub fn clean_name(name: &str) -> Option<String> {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let s: String = s.chars().take(MAX_NAME_CHARS).collect();
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 pub struct Identity {
@@ -21,15 +45,17 @@ pub struct Identity {
 
 impl Identity {
     /// Читает ключ из `identity.json` в папке данных или создаёт новый.
+    /// [name] - имя по умолчанию; если пользователь выбрал своё, берётся оно.
     pub fn load_or_create(dir: &Path, device_id: &str, name: &str) -> Result<Identity> {
         let path = dir.join("identity.json");
         if let Ok(text) = fs::read_to_string(&path) {
             if let Ok(f) = serde_json::from_str::<KeyFile>(&text) {
                 if let (Some(private), Some(public)) = (unhex(&f.private), unhex(&f.public)) {
+                    let chosen = f.name.as_deref().and_then(clean_name);
                     return Ok(Identity {
                         keys: Keys { private, public },
                         device_id: device_id.to_string(),
-                        name: name.to_string(),
+                        name: chosen.unwrap_or_else(|| name.to_string()),
                     });
                 }
             }
@@ -38,6 +64,7 @@ impl Identity {
         let f = KeyFile {
             private: hex(&keys.private),
             public: hex(&keys.public),
+            name: None,
         };
         fs::create_dir_all(dir)?;
         fs::write(&path, serde_json::to_vec_pretty(&f)?)?;
@@ -50,6 +77,21 @@ impl Identity {
 
     pub fn public_hex(&self) -> String {
         hex(&self.keys.public)
+    }
+
+    /// Запоминает выбранное имя в `identity.json` (ключ не меняется).
+    /// Возвращает очищенное имя.
+    pub fn save_name(dir: &Path, name: &str) -> Result<String> {
+        let name = clean_name(name)
+            .ok_or_else(|| Error::Invalid("имя устройства не может быть пустым".into()))?;
+        let path = dir.join("identity.json");
+        let text = fs::read_to_string(&path)?;
+        let mut f: KeyFile = serde_json::from_str(&text)?;
+        f.name = Some(name.clone());
+        let tmp = dir.join("identity.json.tmp");
+        fs::write(&tmp, serde_json::to_vec_pretty(&f)?)?;
+        fs::rename(&tmp, &path)?;
+        Ok(name)
     }
 }
 
@@ -218,6 +260,54 @@ impl Family {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chosen_name_survives_restart_and_keeps_the_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = Identity::load_or_create(tmp.path(), "d1", "Телефон").unwrap();
+        assert_eq!(first.name, "Телефон");
+        assert_eq!(
+            Identity::save_name(tmp.path(), "  Pixel   Даши\n ").unwrap(),
+            "Pixel Даши"
+        );
+        let again = Identity::load_or_create(tmp.path(), "d1", "Телефон").unwrap();
+        assert_eq!(
+            again.name, "Pixel Даши",
+            "выбранное имя важнее имени по умолчанию"
+        );
+        assert_eq!(again.keys.public, first.keys.public, "ключ не меняется");
+        assert!(Identity::save_name(tmp.path(), " \t ").is_err());
+        assert_eq!(
+            Identity::load_or_create(tmp.path(), "d1", "Телефон")
+                .unwrap()
+                .name,
+            "Pixel Даши"
+        );
+    }
+
+    #[test]
+    fn old_identity_file_without_name_still_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = Identity::load_or_create(tmp.path(), "d1", "PC").unwrap();
+        // файл старого формата: только ключи
+        let old = serde_json::json!({
+            "private": hex(&first.keys.private),
+            "public": hex(&first.keys.public),
+        });
+        fs::write(tmp.path().join("identity.json"), old.to_string()).unwrap();
+        let again = Identity::load_or_create(tmp.path(), "d1", "DESKTOP-1").unwrap();
+        assert_eq!(again.name, "DESKTOP-1");
+        assert_eq!(again.keys.public, first.keys.public);
+    }
+
+    #[test]
+    fn clean_name_rules() {
+        assert_eq!(clean_name("  a\u{0}b  c "), Some("a b c".to_string()));
+        assert_eq!(clean_name(""), None);
+        assert_eq!(clean_name("\n\t"), None);
+        let long = "я".repeat(100);
+        assert_eq!(clean_name(&long).unwrap().chars().count(), MAX_NAME_CHARS);
+    }
 
     #[test]
     fn alias_survives_renames_by_the_device_and_restarts() {

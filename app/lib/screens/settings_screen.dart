@@ -156,6 +156,48 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     if (mounted) setState(() => _batteryFree = v);
   }
 
+  /// Своё имя: так это устройство видят остальные (в «Устройствах» и журнале).
+  Future<void> _editName() async {
+    final controller = TextEditingController(text: hydraNet.deviceName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Имя этого устройства'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              maxLength: 40,
+              decoration: const InputDecoration(hintText: 'Например, «Телефон Даши»'),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+            const Text(
+              'Так это устройство увидят остальные. Они узнают новое имя при следующей синхронизации.',
+              style: TextStyle(fontSize: 13, color: Metro.textDim),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name == null || name.trim() == hydraNet.deviceName) return;
+    final err = await hydraNet.setDeviceName(name);
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Имя не сохранено: $err')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -210,6 +252,15 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             ),
             const Divider(),
           ],
+          ListenableBuilder(
+            listenable: hydraNet,
+            builder: (context, _) => ListTile(
+              title: const Text('Имя этого устройства'),
+              subtitle: Text(hydraNet.deviceName.isEmpty ? '…' : hydraNet.deviceName),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: _editName,
+            ),
+          ),
           ListenableBuilder(
             listenable: hydraNet,
             builder: (context, _) => Column(

@@ -361,6 +361,13 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
         "net_rename" => {
             to_json(n.rename_peer(&arg_str(args, "device_id")?, &arg_str(args, "name")?))
         }
+        // своё имя: сохраняется в identity.json и сразу действует
+        "net_set_name" => {
+            let data_dir = with_state(|st| Ok(st.data_dir.clone()))?;
+            let name = Identity::save_name(&data_dir, &arg_str(args, "name")?).map_err(es)?;
+            n.set_name(&name);
+            Ok(json!({ "name": name }))
+        }
         other => Err(format!("unknown method: {other}")),
     }
 }

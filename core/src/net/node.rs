@@ -50,6 +50,8 @@ struct Status {
 
 pub struct Node<H> {
     ident: Identity,
+    /// Своё имя: меняется в «Настройках» на ходу и уходит другим устройствам в `Hello`.
+    name: Mutex<String>,
     family: Mutex<Family>,
     handle: Arc<H>,
     offer: Mutex<Option<Offer>>,
@@ -108,8 +110,10 @@ fn key32(secret_hex: &str) -> Result<[u8; 32]> {
 
 impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     pub fn new(ident: Identity, family: Family, handle: Arc<H>) -> Arc<Node<H>> {
+        let name = Mutex::new(ident.name.clone());
         Arc::new(Node {
             ident,
+            name,
             family: Mutex::new(family),
             handle,
             offer: Mutex::new(None),
@@ -151,7 +155,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     fn hello(&self) -> Hello {
         let port = lock(&self.st).port;
         let endpoint = lock(&self.st).endpoint.clone();
-        Hello::new(&self.ident.device_id, &self.ident.name, port).with_endpoint(endpoint)
+        Hello::new(&self.ident.device_id, &self.my_name(), port).with_endpoint(endpoint)
     }
 
     // ---------- интернет (iroh) ----------
@@ -361,7 +365,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         });
         json!({
             "device_id": self.ident.device_id,
-            "name": self.ident.name,
+            "name": self.my_name(),
             "public_key": self.ident.public_hex(),
             "secret": hex(&secret),
             "port": lock(&self.st).port,
@@ -873,6 +877,18 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         });
     }
 
+    /// Своё имя, как его видят другие устройства.
+    pub fn my_name(&self) -> String {
+        lock(&self.name).clone()
+    }
+
+    /// Новое своё имя: сразу в статусе, другим устройствам - со следующим `Hello`
+    /// (они обновляют имя при каждой встрече). Сохраняет имя вызывающий (`Identity::save_name`).
+    pub fn set_name(&self, name: &str) {
+        *lock(&self.name) = name.to_string();
+        self.log(&format!("Имя этого устройства: «{name}»"));
+    }
+
     /// Переименовывает устройство только у нас (пустое имя возвращает исходное).
     pub fn rename_peer(&self, device_id: &str, name: &str) -> Result<bool> {
         lock(&self.family).set_alias(device_id, name)
@@ -907,7 +923,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let st = lock(&self.st);
         json!({
             "device_id": self.ident.device_id,
-            "name": self.ident.name,
+            "name": self.my_name(),
             "port": st.port,
             "busy": st.busy,
             "message": st.message,
@@ -1035,6 +1051,37 @@ mod tests {
 
         // посторонний без пары синхронизироваться не может
         assert!(c.sync_peer(&a_id).is_err());
+    }
+
+    #[test]
+    fn new_device_name_reaches_the_other_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, _lib_a) = make(tmp.path(), "phone");
+        let (b, _lib_b) = make(tmp.path(), "pc");
+        let port = a.start().unwrap();
+        b.start().unwrap();
+        let addr = vec![format!("127.0.0.1:{port}")];
+        let offer = a.pair_offer();
+        let before = generation(&b);
+        b.pair_with(
+            addr,
+            offer["public_key"].as_str().unwrap(),
+            offer["secret"].as_str().unwrap(),
+        )
+        .unwrap();
+        wait_done(&b, before);
+        wait_idle(&a);
+        assert_eq!(a.family_json()[0]["original_name"], "pc");
+
+        b.set_name("Рабочий ПК");
+        assert_eq!(b.status_json()["name"], "Рабочий ПК");
+        let a_id = a.status_json()["device_id"].as_str().unwrap().to_string();
+        let before = generation(&b);
+        b.sync_peer(&a_id).unwrap();
+        wait_done(&b, before);
+        wait_idle(&a);
+        assert_eq!(a.family_json()[0]["original_name"], "Рабочий ПК");
+        assert_eq!(a.family_json()[0]["name"], "Рабочий ПК");
     }
 
     #[test]
