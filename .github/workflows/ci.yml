@@ -112,7 +112,15 @@ jobs:
           fi
       - name: Build debug APK
         working-directory: app
-        run: flutter build apk --debug
+        # До трёх попыток с паузой в минуту: Gradle качает зависимости из сети, и временный
+        # сбой (504 от GitHub/Maven) не должен ронять выпуск.
+        run: |
+          for i in 1 2 3; do
+            flutter build apk --debug && break
+            [ "$i" -eq 3 ] && exit 1
+            echo "Сборка debug APK не удалась (попытка $i из 3), повтор через 60 с"
+            sleep 60
+          done
       - name: Free space before release build
         working-directory: app
         run: |
@@ -120,11 +128,19 @@ jobs:
           rm -rf android/.gradle/*/executionHistory || true
           df -h /
       # Для повседневного использования: быстрее и экономнее к батарее, чем debug.
-      # Подписывается отладочным ключом Flutter: подходит для личной установки.
+      # Подписывается постоянным ключом из секрета (см. «Use a fixed signing key»).
       # --no-shrink: R8 вырезает из релиза классы распознавания QR (ML Kit), камера не открывается
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release --no-shrink --dart-define=HYDRA_BUILD=${{ github.sha }}
+        # До трёх попыток с паузой в минуту: Gradle качает зависимости из сети, и временный
+        # сбой (504 от GitHub/Maven) не должен ронять выпуск.
+        run: |
+          for i in 1 2 3; do
+            flutter build apk --release --no-shrink --dart-define=HYDRA_BUILD=${{ github.sha }} && break
+            [ "$i" -eq 3 ] && exit 1
+            echo "Сборка release APK не удалась (попытка $i из 3), повтор через 60 с"
+            sleep 60
+          done
       # Подпись APK проверяется до публикации: битый файл и файл, подписанный
       # не ключом из секрета, в релиз не попадают.
       - name: Verify APK signature
@@ -214,9 +230,15 @@ jobs:
           # Новый Visual Studio отказывается собирать старый плагин permission_handler_windows
           # (<experimental/coroutine>); этот флаг возвращает прежнее поведение.
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+        # повтор при сбое сети, как у Android
+        shell: bash
         run: |
-          flutter pub get
-          flutter build windows --release --dart-define=HYDRA_BUILD=${{ github.sha }}
+          for i in 1 2 3; do
+            flutter pub get && flutter build windows --release --dart-define=HYDRA_BUILD=${{ github.sha }} && break
+            [ "$i" -eq 3 ] && exit 1
+            echo "Сборка Windows не удалась (попытка $i из 3), повтор через 60 с"
+            sleep 60
+          done
       - name: Put the Rust bridge next to the exe
         shell: bash
         run: cp ffi/target/release/hydra_ffi.dll app/build/windows/x64/runner/Release/
