@@ -859,10 +859,18 @@ impl Library {
                     self.stash_image(dir, &fname);
                     continue;
                 }
-                if fname.starts_with('.') || !naming::is_supported_audio(&fname) {
+                if fname.starts_with('.') {
                     continue;
                 }
                 let key = (pid.clone(), naming::fold_key(&fname));
+                if !naming::is_supported_audio(&fname) {
+                    // формат больше не подхватывается, но уже известный трек на месте:
+                    // иначе он считался бы удалённым и ушёл бы в корзину на всех устройствах
+                    if naming::is_dropped_format(&fname) && known.contains(&key) {
+                        present.insert(key);
+                    }
+                    continue;
+                }
                 if !known.contains(&key) {
                     new_files.push((pid.clone(), fname, f.path()));
                 }
@@ -983,6 +991,10 @@ impl Library {
                 self.record_pl(now_ms, &p.id, json!({ "deleted": true }))?;
             }
         }
+
+        // 5a. Один раз: теги треков, добавленных без названия (их не мог прочитать строгий
+        // разбор до 0.32.2), читаются заново
+        self.reread_untagged(now_ms)?;
 
         // 5b. Плейлисты с правилом порядка: новые треки встают на своё место
         let sorted_ids: Vec<String> = dirs.iter().map(|(id, _)| id.clone()).collect();
@@ -1455,6 +1467,55 @@ impl Library {
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<HashSet<_>, _>>()?;
         Ok(ids)
+    }
+
+    /// Один раз на библиотеку (метка `.hydra/tags-reread-1`): треки без названия и исполнителя
+    /// в базе (название показывалось по имени файла) перечитывают теги. До 0.32.2 строгий разбор
+    /// отвергал файлы с испорченным полем (например, годом), и их теги не читались. Найденное
+    /// записывается обычной правкой и уходит на другие устройства; файлы не меняются.
+    fn reread_untagged(&mut self, now_ms: u64) -> Result<usize> {
+        let marker = self.root.join(INTERNAL_DIR).join("tags-reread-1");
+        if marker.exists() {
+            return Ok(0);
+        }
+        let pending = self.pending_ids()?;
+        let mut changed: Vec<String> = Vec::new();
+        let mut n = 0;
+        for t in journal::live_tracks(&self.conn)? {
+            if t.title.is_some() || t.artist.is_some() || pending.contains(&t.track_id) {
+                continue;
+            }
+            let Ok(path) = self
+                .playlist_dir(&t.playlist_id)
+                .map(|d| d.join(&t.file_name))
+            else {
+                continue;
+            };
+            if !path.is_file() {
+                continue;
+            }
+            let (title, artist) = read_tags(&path);
+            if title.is_none() && artist.is_none() {
+                continue;
+            }
+            let mut payload = json!({});
+            if let Some(x) = title {
+                payload["title"] = json!(x);
+            }
+            if let Some(x) = artist {
+                payload["artist"] = json!(x);
+            }
+            self.record(now_ms, Kind::Edit, &t.track_id, payload)?;
+            if !changed.contains(&t.playlist_id) {
+                changed.push(t.playlist_id.clone());
+            }
+            n += 1;
+        }
+        for pid in &changed {
+            self.write_manifest(pid)?;
+        }
+        let _ = fs::write(&marker, "");
+        Ok(n)
     }
 
     /// Где лежит манифест плейлиста (порядок треков): `.hydra/playlists/<id>.json`.
@@ -2442,11 +2503,9 @@ mod tests {
         assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
     }
 
-    /// MP3 с испорченным годом в ID3 (не 4 цифры): строгий разбор отвергал весь файл, поэтому
-    /// не читалось название и не записывались правки. Теперь испорченное поле пропускается.
-    #[test]
-    fn mp3_with_broken_year_is_read_and_edited() {
-        use lofty::prelude::*;
+    /// MP3 с тегами ID3v2.3 (название, исполнитель и испорченный год «19») и несколькими
+    /// настоящими кадрами MPEG: строгий разбор такой файл не читал.
+    fn mp3_with_tags(title: &str, artist: &str) -> Vec<u8> {
         fn frame(id: &[u8; 4], text: &str) -> Vec<u8> {
             let mut body = vec![0u8]; // ISO-8859-1
             body.extend_from_slice(text.as_bytes());
@@ -2456,8 +2515,8 @@ mod tests {
             f.extend_from_slice(&body);
             f
         }
-        let mut frames = frame(b"TIT2", "Ear song");
-        frames.extend(frame(b"TPE1", "Band"));
+        let mut frames = frame(b"TIT2", title);
+        frames.extend(frame(b"TPE1", artist));
         frames.extend(frame(b"TYER", "19")); // год из двух цифр
         let n = frames.len() as u32;
         let size = [
@@ -2474,6 +2533,85 @@ mod tests {
             mp3.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
             mp3.extend(std::iter::repeat(0u8).take(413));
         }
+
+        mp3
+    }
+
+    #[test]
+    fn video_containers_are_picked_up_and_android_unplayable_formats_are_not() {
+        let (_t, mut lib) = setup();
+        for f in ["a.mkv", "b.webm", "c.mov", "d.m4v", "e.mp4"] {
+            put(&lib, "Rock", f, f);
+        }
+        for f in ["x.wma", "y.ape", "z.wv", "w.aiff", "v.avi"] {
+            put(&lib, "Rock", f, f);
+        }
+        lib.scan(T0 + 1).unwrap();
+        assert_eq!(
+            names(&lib, "Rock"),
+            ["a.mkv", "b.webm", "c.mov", "d.m4v", "e.mp4"]
+        );
+    }
+
+    /// Трек формата, который больше не подхватывается (WMA и т. п.), добавленный раньше,
+    /// не считается пропавшим: иначе он ушёл бы в корзину на всех устройствах.
+    #[test]
+    fn known_track_of_a_dropped_format_is_not_deleted() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        // трек, добавленный старой версией, когда WMA ещё подхватывался
+        fs::write(lib.root().join("Rock").join("old.wma"), "wma").unwrap();
+        let key = journal::append_key(&lib.conn, &rock).unwrap();
+        let id = Uuid::new_v4().to_string();
+        let payload = journal::add_payload(&rock, "old.wma", "sha-old", Some("Old"), None, &key);
+        lib.record(T0 + 2, Kind::Add, &id, payload).unwrap();
+        assert_eq!(names(&lib, "Rock"), ["a.mp3", "old.wma"]);
+
+        let r = lib.scan(T0 + 3).unwrap();
+        assert_eq!(r.removed, 0);
+        assert_eq!(names(&lib, "Rock"), ["a.mp3", "old.wma"]);
+        assert!(lib.trash_items().unwrap().is_empty());
+    }
+
+    /// Треки, добавленные без названия (теги не читались до 0.32.2), один раз получают
+    /// название и исполнителя из тегов; повторно перечитывание не запускается.
+    #[test]
+    fn untagged_tracks_reread_their_tags_once() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "song.mp3", "not really audio");
+        let marker = lib.root().join(INTERNAL_DIR).join("tags-reread-1");
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        assert_eq!(lib.tracks(&rock).unwrap()[0].title, "song");
+        assert!(marker.exists(), "первый скан оставляет метку");
+
+        // как у старой версии: трек в базе без названия, а в файле теги, которые раньше не читались
+        fs::write(
+            lib.root().join("Rock").join("song.mp3"),
+            mp3_with_tags("Left ear", "nia"),
+        )
+        .unwrap();
+        fs::remove_file(&marker).unwrap();
+        lib.scan(T0 + 2).unwrap();
+        let t = lib.tracks(&rock).unwrap().remove(0);
+        assert_eq!(t.title, "Left ear");
+        assert_eq!(t.artist.as_deref(), Some("nia"));
+        assert!(marker.exists());
+
+        // метка есть: свои правки больше ничем не перезаписываются
+        lib.edit_track(&t.track_id, "Моё", "", T0 + 3).unwrap();
+        lib.scan(T0 + 4).unwrap();
+        assert_eq!(lib.tracks(&rock).unwrap()[0].title, "Моё");
+    }
+
+    /// MP3 с испорченным годом в ID3 (не 4 цифры): строгий разбор отвергал весь файл, поэтому
+    /// не читалось название и не записывались правки. Теперь испорченное поле пропускается.
+    #[test]
+    fn mp3_with_broken_year_is_read_and_edited() {
+        use lofty::prelude::*;
+        let mp3 = mp3_with_tags("Ear song", "Band");
 
         let (_t, mut lib) = setup();
         let dir = lib.root().join("Rock");

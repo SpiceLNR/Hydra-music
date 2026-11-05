@@ -92,12 +92,22 @@ pub fn playlist_manifest_name(playlist_dir: &str) -> String {
     format!(".{}.json", sanitize(playlist_dir))
 }
 
-/// Расширения, которые плеер считает аудио. mp4/m4a/mkv и т.п. играются только звуком.
+/// Форматы, которые подхватываются в библиотеку: только те, что играют и на Windows (mpv),
+/// и на Android (ExoPlayer). Видеоконтейнеры (mp4, mkv, webm, mov, m4v) играют звуком.
+/// WMA, APE, WavPack, AIFF и AVI Android не играет, поэтому новые такие файлы не
+/// подхватываются (уже добавленные остаются: см. [`is_dropped_format`]).
 pub fn is_supported_audio(file_name: &str) -> bool {
     const EXT: &[&str] = &[
-        "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma", "aiff", "aif", "ape",
-        "wv", "mka", "mp4", "m4b",
+        "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "mka", "mp4", "m4b", "mkv",
+        "webm", "mov", "m4v",
     ];
+    ext(file_name).map_or(false, |e| EXT.contains(&e.as_str()))
+}
+
+/// Форматы, которые раньше подхватывались, а с 0.33.0 нет (не играют на Android).
+/// Уже добавленные треки этих форматов не считаются пропавшими и не уходят в корзину.
+pub fn is_dropped_format(file_name: &str) -> bool {
+    const EXT: &[&str] = &["wma", "aiff", "aif", "ape", "wv"];
     ext(file_name).map_or(false, |e| EXT.contains(&e.as_str()))
 }
 
@@ -181,6 +191,9 @@ mod tests {
         assert!(is_supported_audio("a.FLAC"));
         assert!(is_supported_audio("clip.mp4"));
         assert!(!is_supported_audio("cover.jpg"));
+        assert!(is_supported_audio("clip.webm") && is_supported_audio("clip.MKV"));
+        assert!(!is_supported_audio("old.wma") && is_dropped_format("old.wma"));
+        assert!(!is_supported_audio("film.avi") && !is_dropped_format("film.avi"));
         assert!(is_video_container("clip.MP4"));
         assert!(!is_video_container("song.flac"));
     }
