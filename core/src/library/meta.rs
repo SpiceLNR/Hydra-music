@@ -91,6 +91,58 @@ impl Library {
         Ok(None)
     }
 
+    /// Удаляет из `.hydra/covers` картинки, которые больше не нужны: на них не ссылается ни
+    /// живой трек, ни трек в корзине, ни запись `meta.json`. Так уходят прежние обложки после
+    /// замены и обложки треков, удалённых насовсем. Трогаются только файлы вида `<хэш>.jpg`
+    /// не моложе [min_age] (картинка, которая как раз приходит с другого устройства, цела).
+    /// Если удалённый трек вернётся правкой с другого устройства, его обложка скачается заново.
+    pub(super) fn purge_unused_covers(&self, min_age: std::time::Duration) -> Result<usize> {
+        let Ok(rd) = fs::read_dir(self.covers_dir()) else {
+            return Ok(0);
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT o.track_id FROM ops o JOIN tracks t ON t.track_id = o.track_id
+             WHERE o.kind = 'edit' AND o.payload LIKE '%\"cover\"%'
+               AND (t.deleted = 0 OR t.track_id IN (SELECT track_id FROM trash))",
+        )?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut used: HashSet<String> = HashSet::new();
+        for id in ids {
+            if let Some(c) = self.track_cover(&id)? {
+                used.insert(c.to_ascii_lowercase());
+            }
+        }
+        for o in self.load_overrides().values() {
+            if let Some(c) = o.cover.as_ref().filter(|c| !c.is_empty()) {
+                used.insert(c.to_ascii_lowercase());
+            }
+        }
+        let now = std::time::SystemTime::now();
+        let mut removed = 0;
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let Some(sha) = name.strip_suffix(".jpg") else {
+                continue;
+            };
+            if self.cover_file(sha).is_none() || used.contains(&sha.to_ascii_lowercase()) {
+                continue; // не наш файл или картинка нужна
+            }
+            let old_enough = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age >= min_age);
+            if old_enough && fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Картинки, которых не хватает на этом устройстве (хэш картинки), для живых треков.
     pub(super) fn missing_covers(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
@@ -241,6 +293,7 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     const T0: u64 = 9_000_000;
 
@@ -313,6 +366,62 @@ mod tests {
             .save(&p)
             .unwrap();
         p
+    }
+
+    fn covers_on_disk(tmp: &tempfile::TempDir) -> usize {
+        fs::read_dir(tmp.path().join("Hydra/.hydra/covers"))
+            .map(|rd| rd.count())
+            .unwrap_or(0)
+    }
+
+    /// Прежние обложки и обложки треков, удалённых насовсем, убираются; текущие и обложки
+    /// треков в корзине остаются; чужие файлы и свежие картинки не трогаются.
+    #[test]
+    fn unused_covers_are_purged_and_needed_ones_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut lib = open(&tmp, "a.db", T0);
+        put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Rock", "b.mp3", "bbb");
+        lib.scan(T0 + 1).unwrap();
+        let a = find(&lib, "a.mp3").track_id;
+        let b = find(&lib, "b.mp3").track_id;
+        lib.set_cover(&a, &png(tmp.path(), "1.png", 10), T0 + 2)
+            .unwrap();
+        lib.set_cover(&a, &png(tmp.path(), "2.png", 20), T0 + 3)
+            .unwrap();
+        lib.set_cover(&b, &png(tmp.path(), "3.png", 30), T0 + 4)
+            .unwrap();
+        let foreign = tmp.path().join("Hydra/.hydra/covers/readme.txt");
+        fs::write(&foreign, "не наше").unwrap();
+        assert_eq!(covers_on_disk(&tmp), 4);
+
+        // свежие картинки не трогаются
+        assert_eq!(
+            lib.purge_unused_covers(Duration::from_secs(3600)).unwrap(),
+            0
+        );
+        // прежняя обложка трека a больше не нужна
+        assert_eq!(lib.purge_unused_covers(Duration::ZERO).unwrap(), 1);
+        let a_cover = lib.cover(&a).unwrap().expect("текущая обложка на месте").1;
+        assert!(!a_cover.is_empty());
+
+        // трек в корзине: обложка нужна для восстановления
+        lib.delete_track(&b, T0 + 5).unwrap();
+        lib.write_overrides(true).unwrap();
+        assert_eq!(lib.purge_unused_covers(Duration::ZERO).unwrap(), 0);
+        lib.restore_track(&b, T0 + 6).unwrap();
+        assert!(
+            lib.cover(&b).unwrap().is_some(),
+            "восстановленный трек с обложкой"
+        );
+
+        // удалён насовсем: обложка уходит
+        lib.delete_track(&b, T0 + 7).unwrap();
+        lib.purge_track(&b).unwrap();
+        lib.write_overrides(true).unwrap();
+        assert_eq!(lib.purge_unused_covers(Duration::ZERO).unwrap(), 1);
+        assert!(foreign.exists(), "чужой файл не тронут");
+        assert_eq!(covers_on_disk(&tmp), 2, "обложка трека a и чужой файл");
     }
 
     #[test]

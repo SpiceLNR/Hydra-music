@@ -1013,6 +1013,8 @@ impl Library {
             }
         }
         let _ = self.write_overrides(true);
+        // прежние обложки и обложки треков, удалённых насовсем (не моложе часа)
+        let _ = self.purge_unused_covers(std::time::Duration::from_secs(3600));
         Ok(report)
     }
 
