@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:tray_manager/tray_manager.dart' show trayManager;
 
 import 'build_info.dart';
 import 'core_bridge.dart';
@@ -211,11 +212,20 @@ class UpdateService extends ChangeNotifier {
 
   /// Когда последний раз удалось прочитать описание версии (для экрана настроек).
   DateTime? lastChecked;
+  DateTime? _lastAttempt;
+
+  /// Проверка, если последняя попытка была больше часа назад (разворачивание шторки).
+  Future<void> checkIfStale() async {
+    final last = _lastAttempt;
+    if (last != null && DateTime.now().difference(last) < const Duration(hours: 1)) return;
+    await check();
+  }
 
   /// Проверка новой версии. Без сети молчит: плашка просто не появляется.
   Future<CheckResult> check() async {
     if (!supported || _dir == null) return CheckResult.skipped;
     if (state != UpdateState.idle && state != UpdateState.available) return CheckResult.busy;
+    _lastAttempt = DateTime.now();
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
     try {
       final res = await _open(c, '$_baseUrl$_manifest').timeout(const Duration(seconds: 30));
@@ -456,6 +466,10 @@ class UpdateService extends ChangeNotifier {
         'args': ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script.path],
         'cwd': _updateDir.path,
       });
+      // значок в трее убирается сам только при обычном выходе
+      try {
+        await trayManager.destroy();
+      } catch (_) {}
       exit(0);
     } catch (e) {
       _set(UpdateState.ready, err: _short(e));

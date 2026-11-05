@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../build_info.dart';
 import '../core_bridge.dart';
+import '../desktop/autostart.dart';
 import '../desktop/desktop_settings.dart';
 import '../desktop/dock_controller.dart';
 import '../library_controller.dart';
@@ -250,6 +251,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                 );
               },
             ),
+            const _AutostartRow(),
             const Divider(),
           ],
           ListenableBuilder(
@@ -438,6 +440,67 @@ class _UpdateTileState extends State<_UpdateTile> {
           ),
         );
       },
+    );
+  }
+}
+
+/// «Запускать вместе с Windows»: программа стартует свёрнутой у края экрана.
+class _AutostartRow extends StatefulWidget {
+  const _AutostartRow();
+
+  @override
+  State<_AutostartRow> createState() => _AutostartRowState();
+}
+
+class _AutostartRowState extends State<_AutostartRow> {
+  bool? _on; // null: ещё не прочитали или не удалось
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final on = await Autostart.isEnabled();
+      if (mounted) setState(() => _on = on);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _set(bool on) async {
+    try {
+      await Autostart.setEnabled(on);
+      _error = null;
+    } catch (e) {
+      _error = '$e';
+    }
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MetroSwitchRow(
+          title: 'Запускать вместе с Windows',
+          value: _on ?? false,
+          onChanged: (v) => _set(v),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+            _error != null
+                ? 'Не получилось: $_error'
+                : 'Программа стартует свёрнутой у края экрана, значок - в области уведомлений.',
+            style: TextStyle(fontSize: 13, color: _error != null ? Metro.danger : Metro.textDim),
+          ),
+        ),
+      ],
     );
   }
 }

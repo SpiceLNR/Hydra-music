@@ -20,6 +20,7 @@ import 'desktop_settings.dart';
 import 'dock_controller.dart';
 import 'player_panel.dart';
 import 'resize_handle.dart';
+import 'tray.dart';
 
 /// Главный экран Windows: «шторка» у края экрана. Развёрнутая или свёрнутая в полоску.
 class DesktopShell extends StatelessWidget {
@@ -600,7 +601,11 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
             _headerButton(Icons.devices, 'Устройства', () => _openRoute(const DevicesScreen())),
             _headerButton(Icons.delete_outline, 'Корзина', _toggleTrash, active: _mode == _Mode.trash),
             _headerButton(Icons.settings, 'Настройки', () => _openRoute(const SettingsScreen())),
-            _headerButton(Icons.close, 'Закрыть', DockController.instance.close),
+            // со значком в трее крестик только сворачивает: выход - в меню значка
+            HydraTray.instance.ready
+                ? _headerButton(Icons.close, 'Свернуть (выход - в меню значка в трее)',
+                    DockController.instance.collapse)
+                : _headerButton(Icons.close, 'Закрыть', DockController.instance.close),
           ],
         ),
     );

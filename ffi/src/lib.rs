@@ -396,8 +396,89 @@ fn dispatch(request: &str) -> Result<Value, String> {
             with_state(|st| call(st, &method, args))
         }
         "spawn_hidden" => spawn_hidden(args),
+        "autostart_get" => {
+            autostart::get(&autostart_name(args)).map(|cmd| json!({ "command": cmd }))
+        }
+        "autostart_set" => {
+            let name = autostart_name(args);
+            match args["command"].as_str() {
+                Some(cmd) if !cmd.is_empty() => autostart::set(&name, cmd),
+                _ => autostart::remove(&name),
+            }
+            .map(|_| Value::Null)
+        }
         m if m.starts_with("net_") => net_call(m, args),
         _ => with_state(|st| call(st, &method, args)),
+    }
+}
+
+/// Имя записи автозапуска (тесты передают своё, чтобы не трогать настоящую).
+fn autostart_name(args: &Value) -> String {
+    args["name"].as_str().unwrap_or("Hydra Music").to_string()
+}
+
+/// Автозапуск вместе с Windows: строка в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+/// Без прав администратора. Реестр читается напрямую (`winreg`): вывод `reg.exe` идёт
+/// в кодировке консоли и портит кириллицу в пути.
+mod autostart {
+    #[cfg(windows)]
+    use winreg::{enums::*, RegKey};
+
+    #[cfg(windows)]
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    #[cfg(windows)]
+    fn run_key(write: bool) -> Result<RegKey, String> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let flags = if write {
+            KEY_READ | KEY_WRITE
+        } else {
+            KEY_READ
+        };
+        hkcu.open_subkey_with_flags(KEY, flags)
+            .or_else(|_| hkcu.create_subkey(KEY).map(|(k, _)| k))
+            .map_err(|e| format!("реестр: {e}"))
+    }
+
+    /// Команда автозапуска или `None`, если записи нет.
+    #[cfg(windows)]
+    pub fn get(name: &str) -> Result<Option<String>, String> {
+        match run_key(false)?.get_value::<String, _>(name) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("реестр: {e}")),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn set(name: &str, command: &str) -> Result<(), String> {
+        run_key(true)?
+            .set_value(name, &command.to_string())
+            .map_err(|e| format!("не удалось включить автозапуск: {e}"))
+    }
+
+    #[cfg(windows)]
+    pub fn remove(name: &str) -> Result<(), String> {
+        match run_key(true)?.delete_value(name) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("не удалось выключить автозапуск: {e}")),
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn get(_name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    #[cfg(not(windows))]
+    pub fn set(_name: &str, _command: &str) -> Result<(), String> {
+        Err("автозапуск есть только на Windows".to_string())
+    }
+
+    #[cfg(not(windows))]
+    pub fn remove(_name: &str) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -558,6 +639,29 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert!(out.exists(), "процесс запущен не в переданной папке");
+    }
+
+    /// Автозапуск: запись появляется с нужной командой (кавычки вокруг пути целы)
+    /// и исчезает. Своё имя записи, настоящую «Hydra Music» тест не трогает.
+    #[cfg(windows)]
+    #[test]
+    fn autostart_entry_roundtrip() {
+        let name = format!("HydraMusicTest-{}", uuid::Uuid::new_v4());
+        let cmd =
+            r#""C:\Users\Тест User\AppData\Local\HydraMusic\app\hydra_music.exe" --autostart"#;
+        assert_eq!(
+            ok("autostart_get", json!({ "name": name }))["command"],
+            Value::Null
+        );
+        ok("autostart_set", json!({ "name": name, "command": cmd }));
+        assert_eq!(ok("autostart_get", json!({ "name": name }))["command"], cmd);
+        ok("autostart_set", json!({ "name": name, "command": "" }));
+        assert_eq!(
+            ok("autostart_get", json!({ "name": name }))["command"],
+            Value::Null
+        );
+        // выключение уже выключенного - не ошибка
+        ok("autostart_set", json!({ "name": name }));
     }
 
     #[test]

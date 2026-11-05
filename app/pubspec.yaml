@@ -1,7 +1,7 @@
 name: hydra_music
 description: Hydra Music - private audio player with P2P folder sync.
 publish_to: "none"
-version: 0.28.0+1
+version: 0.29.0+1
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -25,6 +25,8 @@ dependencies:
   file_picker: ^13.3.1
   # Windows: окно-шторка у края экрана и настройки
   window_manager: ^0.5.0
+  # Windows: значок в области уведомлений (трей) с меню
+  tray_manager: ">=0.2.3 <1.0.0"
   screen_retriever: ^0.2.0
   shared_preferences: ^2.3.0
   # автообновление: проверка SHA-256 скачанной сборки
@@ -43,6 +45,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
+    - assets/tray.ico
   # Шрифт Noto Sans Medium (SIL Open Font License 1.1, текст лицензии: assets/fonts/OFL.txt).
   # Лежит только одно начертание; жирное и светлое Flutter подставит из него.
   fonts:

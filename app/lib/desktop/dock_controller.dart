@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../updater.dart';
 import 'desktop_settings.dart';
 import 'win32_frame.dart';
 
@@ -63,9 +64,14 @@ class DockController with WindowListener {
 
   /// Показывает окно, когда Flutter уже нарисовал первый кадр: иначе на миг видна
   /// пустая белая рамка. Вызывается из `main` после `runApp`.
-  Future<void> reveal() async {
+  /// [startCollapsed]: запуск вместе с Windows - сразу свёрнутой кнопкой у края.
+  Future<void> reveal({bool startCollapsed = false}) async {
     if (!Platform.isWindows || !_ready) return;
     await Future<void>.delayed(const Duration(milliseconds: 60));
+    if (startCollapsed) {
+      await collapse();
+      return;
+    }
     Win32Frame.makeBorderless(_title); // повторно: вдруг рамку вернули при показе
     await windowManager.show();
     await windowManager.focus();
@@ -168,6 +174,20 @@ class DockController with WindowListener {
       await windowManager.focus();
     } finally {
       _busy = false;
+    }
+    // программа может висеть у края сутками: при разворачивании проверяем обновления
+    // (не чаще раза в час)
+    unawaited(UpdateService.instance.checkIfStale());
+  }
+
+  /// Значок в трее: развернуть шторку (или просто вывести её вперёд).
+  Future<void> show() async {
+    if (!_ready) return;
+    if (collapsed.value) {
+      await expand();
+    } else {
+      await windowManager.show();
+      await windowManager.focus();
     }
   }
 
