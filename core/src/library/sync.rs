@@ -742,6 +742,7 @@ impl Library {
                                 "UPDATE playlists SET deleted = 1 WHERE playlist_id = ?1",
                                 [playlist_id],
                             )?;
+                            self.remove_manifest(playlist_id);
                         }
                     }
                     // в плейлисте есть наши треки: удаление не применяем, плейлист остаётся

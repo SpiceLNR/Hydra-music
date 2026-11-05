@@ -31,9 +31,22 @@ pub use sync::{FileNeed, InvPlaylist, InvTrack, Inventory, MergeReport, PlOp, Sy
 
 pub const INTERNAL_DIR: &str = ".hydra";
 /// Корзина: скрытая папка в корне библиотеки (переживает переустановку приложения).
-pub const TRASH_DIR: &str = ".trash";
+/// Прежнее место корзины (до 0.31.0): переносится в `.hydra/trash` при открытии.
+pub const LEGACY_TRASH_DIR: &str = ".trash";
 const TRASH_META: &str = "item.json";
-const PLAYLIST_ORDER_FILE: &str = ".playlists.json";
+/// Прежнее место порядка плейлистов (до 0.31.0).
+const LEGACY_PLAYLIST_ORDER_FILE: &str = ".playlists.json";
+/// Порядок плейлистов: `.hydra/playlists.json`.
+const PLAYLIST_ORDER_FILE: &str = "playlists.json";
+/// Манифесты плейлистов (порядок треков): `.hydra/playlists/<id плейлиста>.json`.
+const MANIFEST_DIR: &str = "playlists";
+/// Картинки, найденные в папках плейлистов: `.hydra/images/<плейлист>/`.
+const IMAGES_DIR: &str = "images";
+
+/// Корзина: `.hydra/trash/<id трека>/`.
+pub fn trash_root(root: &Path) -> PathBuf {
+    root.join(INTERNAL_DIR).join("trash")
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PlaylistInfo {
@@ -111,11 +124,9 @@ pub struct Library {
 impl Library {
     /// `root` - папка Hydra (Music/Hydra), `db_path` - база в приватной папке приложения.
     pub fn open(root: &Path, db_path: &Path, device_id: &str, now_ms: u64) -> Result<Self> {
-        fs::create_dir_all(root.join(INTERNAL_DIR))?;
-        fs::create_dir_all(root.join(TRASH_DIR))?;
+        fs::create_dir_all(trash_root(root))?;
         hide(&root.join(INTERNAL_DIR));
-        hide(&root.join(TRASH_DIR));
-        migrate_legacy_trash(root);
+        let migrated = migrate_service_files(root);
         let conn = db::open(db_path)?;
         let mut clock = Clock::new(device_id);
         // Часы не должны откатываться после перезапуска.
@@ -126,13 +137,20 @@ impl Library {
                 clock.observe(&h, now_ms);
             }
         }
-        Ok(Self {
+        let lib = Self {
             root: root.to_path_buf(),
             device_id: device_id.to_string(),
             conn,
             clock,
             held: Vec::new(),
-        })
+        };
+        if migrated {
+            // старые манифесты убраны из папок: сразу пишем их на новом месте
+            for p in lib.playlists().unwrap_or_default() {
+                let _ = lib.write_manifest(&p.playlist_id);
+            }
+        }
+        Ok(lib)
     }
 
     pub fn root(&self) -> &Path {
@@ -316,8 +334,6 @@ impl Library {
         } else {
             fs::create_dir_all(&new_path)?;
         }
-        // старый скрытый json переехал вместе с папкой: убираем его, пишем новый
-        let _ = fs::remove_file(new_path.join(naming::playlist_manifest_name(&row.dir_name)));
         self.conn.execute(
             "UPDATE playlists SET dir_name = ?2 WHERE playlist_id = ?1",
             params![playlist_id, new_dir],
@@ -363,6 +379,7 @@ impl Library {
             "UPDATE playlists SET deleted = 1 WHERE playlist_id = ?1",
             [playlist_id],
         )?;
+        self.remove_manifest(playlist_id);
         self.record_pl(wall_ms(), playlist_id, json!({ "deleted": true }))?;
         self.write_playlist_order()?;
         Ok(())
@@ -668,7 +685,7 @@ impl Library {
             journal::forget_trashed(&self.conn, id)?;
         }
         // остатки без записи в базе (например, после сбоя)
-        if let Ok(rd) = fs::read_dir(self.root.join(TRASH_DIR)) {
+        if let Ok(rd) = fs::read_dir(trash_root(&self.root)) {
             for e in rd.flatten() {
                 let _ = fs::remove_dir_all(e.path());
             }
@@ -838,6 +855,10 @@ impl Library {
                     continue;
                 }
                 let fname = f.file_name().to_string_lossy().to_string();
+                if !fname.starts_with('.') && naming::is_image(&fname) {
+                    self.stash_image(dir, &fname);
+                    continue;
+                }
                 if fname.starts_with('.') || !naming::is_supported_audio(&fname) {
                     continue;
                 }
@@ -1105,7 +1126,7 @@ impl Library {
     }
 
     fn trash_dir(&self, track_id: &str) -> PathBuf {
-        self.root.join(TRASH_DIR).join(track_id)
+        trash_root(&self.root).join(track_id)
     }
 
     fn tmp_dir(&self) -> PathBuf {
@@ -1177,7 +1198,7 @@ impl Library {
     /// превращается обратно в «добавлен, затем удалён» с прежней датой удаления.
     /// Заодно дописывает `item.json` тем записям, у которых его ещё нет (старая корзина).
     fn recover_trash(&mut self, now_ms: u64) -> Result<()> {
-        let trash_root = self.root.join(TRASH_DIR);
+        let trash_root = trash_root(&self.root);
         let Ok(rd) = fs::read_dir(&trash_root) else {
             return Ok(());
         };
@@ -1281,11 +1302,11 @@ impl Library {
         Ok(id)
     }
 
-    /// Порядок плейлистов в скрытом `.playlists.json`: после переустановки он возвращается.
+    /// Порядок плейлистов в `.hydra/playlists.json`: после переустановки он возвращается.
     fn write_playlist_order(&self) -> Result<()> {
         let names: Vec<String> = self.playlists()?.into_iter().map(|p| p.name).collect();
         let content = serde_json::to_string_pretty(&json!({ "version": 1, "order": names }))?;
-        let path = self.root.join(PLAYLIST_ORDER_FILE);
+        let path = self.root.join(INTERNAL_DIR).join(PLAYLIST_ORDER_FILE);
         if fs::read_to_string(&path).ok().as_deref() == Some(content.as_str()) {
             return Ok(());
         }
@@ -1296,7 +1317,7 @@ impl Library {
     }
 
     fn saved_playlist_order(&self) -> Vec<String> {
-        fs::read_to_string(self.root.join(PLAYLIST_ORDER_FILE))
+        fs::read_to_string(self.root.join(INTERNAL_DIR).join(PLAYLIST_ORDER_FILE))
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| {
@@ -1436,17 +1457,52 @@ impl Library {
         Ok(ids)
     }
 
-    /// Пишет скрытый `.<Плейлист>.json` рядом с треками, только если он изменился.
+    /// Где лежит манифест плейлиста (порядок треков): `.hydra/playlists/<id>.json`.
+    /// По id, а не по имени: переименование папки не оставляет старых файлов.
+    pub(crate) fn manifest_path(&self, playlist_id: &str) -> PathBuf {
+        self.root
+            .join(INTERNAL_DIR)
+            .join(MANIFEST_DIR)
+            .join(format!("{}.json", naming::sanitize(playlist_id)))
+    }
+
+    pub(crate) fn remove_manifest(&self, playlist_id: &str) {
+        let _ = fs::remove_file(self.manifest_path(playlist_id));
+    }
+
+    /// Картинку из папки плейлиста (folder.jpg и т. п.) убирает в `.hydra/images/<плейлист>/`:
+    /// среди музыки остаются только треки. Если имя занято, добавляется номер.
+    fn stash_image(&self, playlist_dir: &Path, file_name: &str) {
+        let Some(pl) = playlist_dir.file_name() else {
+            return;
+        };
+        let target_dir = self.root.join(INTERNAL_DIR).join(IMAGES_DIR).join(pl);
+        if fs::create_dir_all(&target_dir).is_err() {
+            return;
+        }
+        let existing: Vec<String> = fs::read_dir(&target_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let name = naming::unique_file_name(file_name, &existing);
+        let src = playlist_dir.join(file_name);
+        // на Windows скрытый файл (например, Folder.jpg от проигрывателя) переносится как есть
+        let _ = fs::rename(&src, target_dir.join(name));
+    }
+
+    /// Пишет манифест плейлиста в `.hydra/playlists/`, только если он изменился.
     pub fn write_manifest(&self, playlist_id: &str) -> Result<()> {
         let dir = self.playlist_dir(playlist_id)?;
         if !dir.is_dir() {
             return Ok(());
         }
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let path = dir.join(naming::playlist_manifest_name(&name));
+        let path = self.manifest_path(playlist_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let content = journal::manifest_json(&self.conn, playlist_id)?;
         if fs::read_to_string(&path).ok().as_deref() == Some(content.as_str()) {
             return Ok(());
@@ -1499,17 +1555,48 @@ fn wall_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Старая корзина лежала в `.hydra/trash/<id>/`: переносим её в `.trash/`.
-fn migrate_legacy_trash(root: &Path) {
-    let old = root.join(INTERNAL_DIR).join("trash");
-    let Ok(rd) = fs::read_dir(&old) else { return };
-    for e in rd.flatten() {
-        let target = root.join(TRASH_DIR).join(e.file_name());
-        if !target.exists() {
-            let _ = fs::rename(e.path(), target);
+/// Служебные файлы до 0.31.0 лежали среди музыки: `.trash/`, `.playlists.json` в корне и
+/// `.<Плейлист>.json` в каждой папке. Переносим всё в `.hydra/` (манифесты пишутся заново).
+/// Повторный вызов ничего не делает. Возвращает true, если старые манифесты были убраны.
+fn migrate_service_files(root: &Path) -> bool {
+    let mut removed_manifests = false;
+    // корзина: .trash/<id> -> .hydra/trash/<id>
+    let old_trash = root.join(LEGACY_TRASH_DIR);
+    if let Ok(rd) = fs::read_dir(&old_trash) {
+        let new_trash = trash_root(root);
+        let _ = fs::create_dir_all(&new_trash);
+        for e in rd.flatten() {
+            let target = new_trash.join(e.file_name());
+            if !target.exists() {
+                let _ = fs::rename(e.path(), target);
+            }
+        }
+        let _ = fs::remove_dir(&old_trash); // только если пустая
+    }
+    // порядок плейлистов
+    let old_order = root.join(LEGACY_PLAYLIST_ORDER_FILE);
+    if old_order.is_file() {
+        let new_order = root.join(INTERNAL_DIR).join(PLAYLIST_ORDER_FILE);
+        if new_order.exists() {
+            let _ = fs::remove_file(&old_order);
+        } else {
+            let _ = fs::rename(&old_order, &new_order);
         }
     }
-    let _ = fs::remove_dir(&old);
+    // манифесты в папках плейлистов: только файл с точным именем манифеста этой папки
+    if let Ok(rd) = fs::read_dir(root) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || !e.path().is_dir() {
+                continue;
+            }
+            let manifest = e.path().join(naming::playlist_manifest_name(&name));
+            if manifest.is_file() && fs::remove_file(manifest).is_ok() {
+                removed_manifests = true;
+            }
+        }
+    }
+    removed_manifests
 }
 
 fn to_info(t: &TrackState, dir: &Path, pending: bool) -> TrackInfo {
@@ -1842,7 +1929,7 @@ mod tests {
 
         lib.delete_track(&id, T0 + 2).unwrap();
         assert!(!lib.root().join("Rock").join("a.mp3").exists());
-        assert!(lib.root().join(TRASH_DIR).join(&id).join("a.mp3").exists());
+        assert!(trash_root(lib.root()).join(&id).join("a.mp3").exists());
         assert_eq!(lib.trash_items().unwrap().len(), 1);
         assert!(lib.tracks(&rock).unwrap().is_empty());
         // скан не воскрешает и не дублирует удалённое
@@ -1868,7 +1955,7 @@ mod tests {
         lib.delete_track(&id, T0 + 2).unwrap();
         lib.purge_track(&id).unwrap();
         assert!(lib.trash_items().unwrap().is_empty());
-        assert!(!lib.root().join(TRASH_DIR).join(&id).exists());
+        assert!(!trash_root(lib.root()).join(&id).exists());
         assert!(lib.restore_track(&id, T0 + 3).is_err());
         // повторный скан не воскрешает стёртый трек
         assert_eq!(lib.scan(T0 + 4).unwrap(), ScanReport::default());
@@ -1887,7 +1974,7 @@ mod tests {
         let day = 24 * 3600 * 1000u64;
         assert_eq!(lib.purge_expired_trash(T0 + 10 * day).unwrap(), 0);
         assert_eq!(lib.purge_expired_trash(T0 + 31 * day).unwrap(), 1);
-        assert!(!lib.root().join(TRASH_DIR).join(&id).exists());
+        assert!(!trash_root(lib.root()).join(&id).exists());
         assert!(lib.restore_track(&id, T0 + 32 * day).is_err());
     }
 
@@ -1988,7 +2075,9 @@ mod tests {
         lib.reorder(&c.track_id, 0, T0 + 2).unwrap();
         assert_eq!(names(&lib, "Rock"), ["c.mp3", "a.mp3", "b.mp3"]);
 
-        let manifest = lib.root().join("Rock").join(".Rock.json");
+        let manifest = lib.manifest_path(&rock);
+        assert!(manifest.starts_with(lib.root().join(INTERNAL_DIR)));
+        assert!(!lib.root().join("Rock").join(".Rock.json").exists());
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(manifest).unwrap()).unwrap();
         let order: Vec<String> = v["order"]
@@ -2074,7 +2163,9 @@ mod tests {
         assert_eq!(r.name, "Hard_Rock");
         assert!(!lib.root().join("Rock").exists());
         assert!(lib.root().join("Hard_Rock").join("a.mp3").exists());
-        assert!(lib
+        // манифест лежит в .hydra по id плейлиста: переименование его не трогает
+        assert!(lib.manifest_path(&rock).is_file());
+        assert!(!lib
             .root()
             .join("Hard_Rock")
             .join(".Hard_Rock.json")
@@ -2156,13 +2247,8 @@ mod tests {
         let rock = playlist_id(&lib, "Rock");
         let a = lib.tracks(&rock).unwrap()[0].track_id.clone();
         lib.delete_track(&a, T0 + 2).unwrap();
-        assert!(lib.root().join(TRASH_DIR).join(&a).join("a.mp3").exists());
-        assert!(lib
-            .root()
-            .join(TRASH_DIR)
-            .join(&a)
-            .join("item.json")
-            .exists());
+        assert!(trash_root(lib.root()).join(&a).join("a.mp3").exists());
+        assert!(trash_root(lib.root()).join(&a).join("item.json").exists());
 
         // «переустановка»: база новая, папка Hydra та же
         drop(lib);
@@ -2207,17 +2293,108 @@ mod tests {
         assert!(lib2.root().join("Old").join("a.mp3").exists());
     }
 
+    /// Раскладка до 0.31.0: корзина `.trash/`, `.playlists.json` в корне и `.<Плейлист>.json`
+    /// в папке. При открытии всё уезжает в `.hydra/`, музыка и чужие файлы не трогаются.
     #[test]
-    fn legacy_trash_is_migrated() {
+    fn service_files_from_before_0_31_move_into_hydra_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("Hydra");
         let id = Uuid::new_v4().to_string();
-        let old = root.join(INTERNAL_DIR).join("trash").join(&id);
-        fs::create_dir_all(&old).unwrap();
-        fs::write(old.join("x.mp3"), "xxx").unwrap();
-        let _lib = Library::open(&root, &tmp.path().join("h.db"), "dev-a", T0).unwrap();
-        assert!(root.join(TRASH_DIR).join(&id).join("x.mp3").exists());
-        assert!(!old.exists());
+        let old_trash = root.join(LEGACY_TRASH_DIR).join(&id);
+        fs::create_dir_all(&old_trash).unwrap();
+        fs::write(old_trash.join("x.mp3"), "xxx").unwrap();
+        fs::write(
+            root.join(LEGACY_PLAYLIST_ORDER_FILE),
+            r#"{"version":1,"order":["Rock"]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("Rock")).unwrap();
+        fs::write(root.join("Rock").join("a.mp3"), "aaa").unwrap();
+        fs::write(root.join("Rock").join(".Rock.json"), "{}").unwrap();
+        fs::write(root.join("Rock").join(".notes.json"), "мои заметки").unwrap();
+
+        let lib = Library::open(&root, &tmp.path().join("h.db"), "dev-a", T0).unwrap();
+        assert!(trash_root(&root).join(&id).join("x.mp3").exists());
+        assert!(
+            !root.join(LEGACY_TRASH_DIR).exists(),
+            "старая корзина убрана"
+        );
+        assert!(root.join(INTERNAL_DIR).join(PLAYLIST_ORDER_FILE).is_file());
+        assert!(!root.join(LEGACY_PLAYLIST_ORDER_FILE).exists());
+        assert!(!root.join("Rock").join(".Rock.json").exists());
+        assert!(root.join("Rock").join("a.mp3").exists(), "музыка на месте");
+        assert!(
+            root.join("Rock").join(".notes.json").exists(),
+            "чужой скрытый файл не трогаем"
+        );
+        drop(lib);
+
+        // повторное открытие ничего не ломает
+        let mut lib = Library::open(&root, &tmp.path().join("h.db"), "dev-a", T0).unwrap();
+        assert!(trash_root(&root).join(&id).join("x.mp3").exists());
+
+        // плейлист уже известен базе, а старый манифест снова лежит в папке (старая версия
+        // на другом устройстве через облако и т. п.): при открытии он сразу пишется на новом месте
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        fs::remove_file(lib.manifest_path(&rock)).ok();
+        drop(lib);
+        fs::write(root.join("Rock").join(".Rock.json"), "{}").unwrap();
+        let lib = Library::open(&root, &tmp.path().join("h.db"), "dev-a", T0).unwrap();
+        assert!(!root.join("Rock").join(".Rock.json").exists());
+        assert!(
+            lib.manifest_path(&rock).is_file(),
+            "манифест сразу на новом месте"
+        );
+    }
+
+    #[test]
+    fn images_leave_playlist_folders_for_hydra_dir() {
+        let (_t, mut lib) = setup();
+        put(&lib, "Rock", "a.mp3", "aaa");
+        put(&lib, "Rock", "folder.jpg", "img1");
+        put(&lib, "Rock", "Cover.PNG", "img2");
+        lib.scan(T0 + 1).unwrap();
+        let images = lib.root().join(INTERNAL_DIR).join(IMAGES_DIR).join("Rock");
+        assert!(!lib.root().join("Rock").join("folder.jpg").exists());
+        assert!(!lib.root().join("Rock").join("Cover.PNG").exists());
+        assert_eq!(
+            fs::read_to_string(images.join("folder.jpg")).unwrap(),
+            "img1"
+        );
+        assert_eq!(
+            fs::read_to_string(images.join("Cover.PNG")).unwrap(),
+            "img2"
+        );
+        assert_eq!(names(&lib, "Rock"), ["a.mp3"]);
+
+        // такая же картинка появилась снова: старая не затирается
+        put(&lib, "Rock", "folder.jpg", "img3");
+        lib.scan(T0 + 2).unwrap();
+        assert_eq!(
+            fs::read_to_string(images.join("folder.jpg")).unwrap(),
+            "img1"
+        );
+        let count = fs::read_dir(&images).unwrap().count();
+        assert_eq!(count, 3, "новая картинка сохранена под другим именем");
+    }
+
+    #[test]
+    fn manifest_lives_in_hydra_dir_and_goes_away_with_the_playlist() {
+        let (_t, mut lib) = setup();
+        let pl = lib.create_playlist("Empty", T0 + 1).unwrap();
+        lib.write_manifest(&pl.playlist_id).unwrap();
+        let manifest = lib.manifest_path(&pl.playlist_id);
+        assert!(manifest.is_file());
+        assert!(
+            fs::read_dir(lib.root().join("Empty"))
+                .unwrap()
+                .next()
+                .is_none(),
+            "в папке плейлиста ничего служебного"
+        );
+        lib.delete_playlist(&pl.playlist_id).unwrap();
+        assert!(!manifest.exists());
     }
 
     #[test]
@@ -2238,7 +2415,7 @@ mod tests {
         lib.delete_track(&ids[1], T0 + 3).unwrap();
         assert_eq!(lib.empty_trash().unwrap(), 2);
         assert!(lib.trash_items().unwrap().is_empty());
-        assert!(fs::read_dir(lib.root().join(TRASH_DIR))
+        assert!(fs::read_dir(trash_root(lib.root()))
             .unwrap()
             .next()
             .is_none());

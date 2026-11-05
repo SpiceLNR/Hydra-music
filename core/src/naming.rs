@@ -17,11 +17,22 @@ pub fn sanitize(name: &str) -> String {
     let nfc: String = name.nfc().collect();
     let mut s: String = nfc
         .chars()
-        .map(|c| if c.is_control() || FORBIDDEN.contains(&c) { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || FORBIDDEN.contains(&c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     s = s.trim().trim_end_matches(['.', ' ']).to_string();
     if s.chars().count() > MAX_LEN {
-        s = s.chars().take(MAX_LEN).collect::<String>().trim_end_matches(['.', ' ']).to_string();
+        s = s
+            .chars()
+            .take(MAX_LEN)
+            .collect::<String>()
+            .trim_end_matches(['.', ' '])
+            .to_string();
     }
     if s.is_empty() {
         s = "Untitled".to_string();
@@ -93,6 +104,12 @@ pub fn is_supported_audio(file_name: &str) -> bool {
 /// Видеоконтейнеры: показываем значок киноплёнки вместо обложки.
 pub fn is_video_container(file_name: &str) -> bool {
     const EXT: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "m4v"];
+    ext(file_name).map_or(false, |e| EXT.contains(&e.as_str()))
+}
+
+/// Картинки (folder.jpg, cover.png и т. п.): среди музыки их не держим, они уезжают в `.hydra/images`.
+pub fn is_image(file_name: &str) -> bool {
+    const EXT: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
     ext(file_name).map_or(false, |e| EXT.contains(&e.as_str()))
 }
 

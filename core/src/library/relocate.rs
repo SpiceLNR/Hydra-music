@@ -84,7 +84,6 @@ impl Library {
         self.root = new_root.to_path_buf();
         self.held.clear();
         hide(&self.root.join(INTERNAL_DIR));
-        hide(&self.root.join(TRASH_DIR));
         Ok(report)
     }
 }
@@ -235,7 +234,7 @@ mod tests {
         assert!(rep.entries >= 3 && rep.files >= 3, "{rep:?}");
         assert!(!old.join("Jazz").exists());
         assert!(new.join("Jazz").join("j.mp3").is_file());
-        assert!(new.join(TRASH_DIR).join(&id).is_dir(), "корзина переехала");
+        assert!(trash_root(&new).join(&id).is_dir(), "корзина переехала");
 
         // ничего не потерялось и не удалилось: скан после переезда пустой
         assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
