@@ -230,15 +230,19 @@ jobs:
           # Новый Visual Studio отказывается собирать старый плагин permission_handler_windows
           # (<experimental/coroutine>); этот флаг возвращает прежнее поведение.
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
-        # повтор при сбое сети, как у Android
-        shell: bash
+        # Повтор при сбое сети, как у Android. Оболочка - PowerShell (по умолчанию), не bash:
+        # Git Bash превращает значение CL «/D_...» в путь, и компилятор не проходит проверку CMake.
         run: |
-          for i in 1 2 3; do
-            flutter pub get && flutter build windows --release --dart-define=HYDRA_BUILD=${{ github.sha }} && break
-            [ "$i" -eq 3 ] && exit 1
-            echo "Сборка Windows не удалась (попытка $i из 3), повтор через 60 с"
-            sleep 60
-          done
+          for ($i = 1; $i -le 3; $i++) {
+            flutter pub get
+            if ($LASTEXITCODE -eq 0) {
+              flutter build windows --release --dart-define=HYDRA_BUILD=${{ github.sha }}
+            }
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -eq 3) { exit 1 }
+            Write-Host "Сборка Windows не удалась (попытка $i из 3), повтор через 60 с"
+            Start-Sleep -Seconds 60
+          }
       - name: Put the Rust bridge next to the exe
         shell: bash
         run: cp ffi/target/release/hydra_ffi.dll app/build/windows/x64/runner/Release/
