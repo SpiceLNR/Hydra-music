@@ -84,6 +84,17 @@ pub fn prepare_cover(image_path: &Path) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Читает теги, определяя формат по содержимому, а не по расширению (бывает, что в `.m4a`
+/// лежит MP3), и пропуская испорченные поля. Строгий разбор отвергал весь файл, если, например,
+/// год записан не четырьмя цифрами: тогда не читались ни название, ни обложка, ни запись.
+pub(crate) fn read_tagged(path: &Path) -> lofty::error::Result<lofty::file::TaggedFile> {
+    use lofty::config::{ParseOptions, ParsingMode};
+    lofty::probe::Probe::open(path)?
+        .options(ParseOptions::new().parsing_mode(ParsingMode::Relaxed))
+        .guess_file_type()?
+        .read()
+}
+
 fn edit(path: &Path, tmp_dir: &Path, change: impl FnOnce(&mut Tag) -> Result<()>) -> Result<()> {
     fs::create_dir_all(tmp_dir)?;
     let ext = path
@@ -109,7 +120,7 @@ fn edit(path: &Path, tmp_dir: &Path, change: impl FnOnce(&mut Tag) -> Result<()>
 }
 
 fn edit_copy(tmp: &Path, change: impl FnOnce(&mut Tag) -> Result<()>) -> Result<()> {
-    let mut tagged = lofty::read_from_path(tmp).map_err(lerr)?;
+    let mut tagged = read_tagged(tmp).map_err(lerr)?;
     if tagged.primary_tag().is_none() {
         let tag_type = tagged.primary_tag_type();
         tagged.insert_tag(Tag::new(tag_type));
@@ -121,6 +132,6 @@ fn edit_copy(tmp: &Path, change: impl FnOnce(&mut Tag) -> Result<()>) -> Result<
     tag.save_to_path(tmp, WriteOptions::default())
         .map_err(lerr)?;
     // Проверка: файл с новыми тегами должен читаться.
-    lofty::read_from_path(tmp).map_err(lerr)?;
+    read_tagged(tmp).map_err(lerr)?;
     Ok(())
 }

@@ -230,7 +230,7 @@ impl Library {
             }
         }
         let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
-        let Ok(tagged) = lofty::read_from_path(&path) else {
+        let Ok(tagged) = tags::read_tagged(&path) else {
             return Ok(None);
         };
         let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
@@ -1656,7 +1656,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 /// вводом: любая ошибка чтения даёт «нет тегов», а не падение.
 fn read_tags(path: &Path) -> (Option<String>, Option<String>) {
     use lofty::prelude::*;
-    let Ok(tagged) = lofty::read_from_path(path) else {
+    let Ok(tagged) = tags::read_tagged(path) else {
         return (None, None);
     };
     let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
@@ -2440,6 +2440,65 @@ mod tests {
             "not really an mp3"
         );
         assert_eq!(lib.scan(T0 + 3).unwrap(), ScanReport::default());
+    }
+
+    /// MP3 с испорченным годом в ID3 (не 4 цифры): строгий разбор отвергал весь файл, поэтому
+    /// не читалось название и не записывались правки. Теперь испорченное поле пропускается.
+    #[test]
+    fn mp3_with_broken_year_is_read_and_edited() {
+        use lofty::prelude::*;
+        fn frame(id: &[u8; 4], text: &str) -> Vec<u8> {
+            let mut body = vec![0u8]; // ISO-8859-1
+            body.extend_from_slice(text.as_bytes());
+            let mut f = id.to_vec();
+            f.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            f.extend_from_slice(&[0, 0]);
+            f.extend_from_slice(&body);
+            f
+        }
+        let mut frames = frame(b"TIT2", "Ear song");
+        frames.extend(frame(b"TPE1", "Band"));
+        frames.extend(frame(b"TYER", "19")); // год из двух цифр
+        let n = frames.len() as u32;
+        let size = [
+            (n >> 21) as u8 & 0x7f,
+            (n >> 14) as u8 & 0x7f,
+            (n >> 7) as u8 & 0x7f,
+            n as u8 & 0x7f,
+        ];
+        let mut mp3 = b"ID3\x03\x00\x00".to_vec();
+        mp3.extend_from_slice(&size);
+        mp3.extend(frames);
+        // несколько кадров MPEG-1 Layer III, 128 кбит/с, 44,1 кГц (417 байт)
+        for _ in 0..8 {
+            mp3.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
+            mp3.extend(std::iter::repeat(0u8).take(413));
+        }
+
+        let (_t, mut lib) = setup();
+        let dir = lib.root().join("Rock");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("broken.mp3"), &mp3).unwrap();
+        lib.scan(T0 + 1).unwrap();
+        let rock = playlist_id(&lib, "Rock");
+        let t = lib.tracks(&rock).unwrap().remove(0);
+        assert_eq!(
+            t.title, "Ear song",
+            "название читается, несмотря на испорченный год"
+        );
+        assert_eq!(t.artist.as_deref(), Some("Band"));
+
+        let in_file = lib
+            .edit_track(&t.track_id, "Новое", "Группа", T0 + 2)
+            .unwrap();
+        assert!(
+            in_file,
+            "правка записана в сам файл, а не только в приложение"
+        );
+        let tagged = tags::read_tagged(&dir.join("broken.mp3")).unwrap();
+        let tag = tagged.primary_tag().unwrap();
+        assert_eq!(tag.title().as_deref(), Some("Новое"));
+        assert_eq!(tag.artist().as_deref(), Some("Группа"));
     }
 
     #[test]
