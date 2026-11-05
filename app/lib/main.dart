@@ -12,6 +12,7 @@ import 'library_controller.dart';
 import 'player_service.dart';
 import 'screens/home_screen.dart';
 import 'theme.dart';
+import 'updater.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,6 +30,8 @@ Future<void> main() async {
   if (Platform.isWindows) {
     // окно показывается только после первого кадра: без белой вспышки при запуске
     WidgetsBinding.instance.addPostFrameCallback((_) => DockController.instance.reveal());
+    // проверка новой версии: сейчас и раз в 6 часов (только сборки из CI)
+    UpdateService.instance.start();
   }
 }
 

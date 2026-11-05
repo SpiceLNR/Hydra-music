@@ -13,6 +13,7 @@ import '../screens/settings_screen.dart';
 import '../theme.dart';
 import '../widgets/held_banner.dart';
 import '../widgets/metro_widgets.dart';
+import '../widgets/update_banner.dart';
 import 'collapsed_strip.dart';
 import 'context_menu.dart';
 import 'desktop_settings.dart';
@@ -956,6 +957,7 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
                     const HeldBanner(),
                     _playlistBar(),
                     Expanded(child: body),
+                    const UpdateBanner(),
                     _status(),
                   ],
                 ),

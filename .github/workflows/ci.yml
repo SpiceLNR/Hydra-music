@@ -216,13 +216,27 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+        # zip собирается 7-Zip: у Compress-Archive (PowerShell 5) внутри обратные слэши,
+        # и часть распаковщиков разбирает такой архив неправильно.
+        # version-windows.json читает автообновление: версия, размер и SHA-256 архива.
+        # Архив выкладывается раньше описания, чтобы описание не указывало на старый файл.
         run: |
-          powershell -Command "Compress-Archive -Path app/build/windows/x64/runner/Release/* -DestinationPath hydra-music-windows.zip -Force"
+          Z="$GITHUB_WORKSPACE/hydra-music-windows.zip"
+          rm -f "$Z"
+          (cd app/build/windows/x64/runner/Release && 7z a -tzip "$Z" * >/dev/null)
+          7z l "$Z" | grep -q ' hydra_music\.exe$' || { echo "В архиве нет hydra_music.exe в корне"; exit 1; }
+          VER=$(grep -m1 '^version:' app/pubspec.yaml | sed 's/^version: *//; s/+.*//' | tr -d '\r')
+          SIZE=$(stat -c %s "$Z")
+          SHA=$(sha256sum "$Z" | cut -d' ' -f1)
+          printf '{"version":"%s","build":"%s","file":"hydra-music-windows.zip","size":%s,"sha256":"%s"}\n' \
+            "$VER" "$GITHUB_SHA" "$SIZE" "$SHA" > version-windows.json
+          cat version-windows.json
           gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease \
               --title "Latest build" --notes "Автоматическая сборка из ветки main" \
               --target "$GITHUB_SHA" || true
-          gh release upload latest hydra-music-windows.zip --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload latest "$Z" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload latest version-windows.json --repo "$GITHUB_REPOSITORY" --clobber
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
