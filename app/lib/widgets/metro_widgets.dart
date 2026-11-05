@@ -340,3 +340,40 @@ class MetroAction extends StatelessWidget {
     );
   }
 }
+
+/// Плашка с форматом файла («MP3», «FLAC»): зелёная, без скруглений.
+/// Цвет постоянный, режим «Анархия» её не перекрашивает.
+class FormatBadge extends StatelessWidget {
+  const FormatBadge(this.fileName, {super.key});
+
+  final String fileName;
+
+  /// Расширение заглавными буквами или null, если его нет или оно странное.
+  static String? extOf(String name) {
+    final dot = name.lastIndexOf('.');
+    if (dot <= 0 || dot == name.length - 1) return null;
+    final ext = name.substring(dot + 1);
+    if (ext.length > 5 || ext.contains(' ')) return null;
+    return ext.toUpperCase();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ext = extOf(fileName);
+    if (ext == null) return const SizedBox.shrink();
+    return Container(
+      color: Metro.green,
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      child: Text(
+        ext,
+        style: const TextStyle(
+          fontSize: 11,
+          height: 1.3,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+}

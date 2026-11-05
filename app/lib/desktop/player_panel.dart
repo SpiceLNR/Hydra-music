@@ -102,6 +102,11 @@ class _PlayerPanelState extends State<PlayerPanel> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // формат файла: над названием
+                        if (track != null) ...[
+                          FormatBadge(track.fileName),
+                          const SizedBox(height: 4),
+                        ],
                         Text(
                           track?.title ?? 'Ничего не играет',
                           maxLines: 2,

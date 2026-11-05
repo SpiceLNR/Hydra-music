@@ -96,7 +96,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 children: [
                   Expanded(
                     child: Center(
-                      child: AspectRatio(aspectRatio: 1, child: _BigCover(track: track, revision: hydraLibrary.tracksRevision)),
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            _BigCover(track: track, revision: hydraLibrary.tracksRevision),
+                            // формат файла: справа внизу на обложке
+                            Positioned(right: 8, bottom: 8, child: FormatBadge(track.fileName)),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                   Align(
