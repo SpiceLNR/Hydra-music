@@ -104,16 +104,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ],
                   ),
                 ),
+                // плашка обновления сразу под плитками
+                const UpdateBanner(),
               ],
             );
           },
         ),
       ),
-      // плашка обновления внизу, сразу над полосой плеера
-      bottomNavigationBar: const Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [UpdateBanner(), NowPlayingBar(safeBottom: true)],
-      ),
+      bottomNavigationBar: const NowPlayingBar(safeBottom: true),
     );
   }
 }
