@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import 'build_info.dart';
+import 'core_bridge.dart';
 
 /// Этапы обновления. Плашка на главном экране показывает каждый по-своему.
 enum UpdateState { idle, available, downloading, paused, preparing, ready, installing, error }
@@ -385,11 +386,12 @@ class UpdateService extends ChangeNotifier {
       final script = File('${_updateDir.path}${_sep}install.ps1');
       // PowerShell 5 читает файл без BOM в кодировке ANSI: пути с кириллицей сломались бы
       await script.writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(_script())]);
-      await Process.start(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', script.path],
-        mode: ProcessStartMode.detached,
-      );
+      // Запуск через ядро (CREATE_NO_WINDOW): Process.start(mode: detached) даёт
+      // DETACHED_PROCESS, и PowerShell 5.1 с ним молча завершается, не выполнив скрипт.
+      await Core.call('spawn_hidden', {
+        'program': 'powershell.exe',
+        'args': ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script.path],
+      });
       exit(0);
     } catch (e) {
       _set(UpdateState.ready, err: _short(e));

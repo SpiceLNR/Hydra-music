@@ -388,9 +388,46 @@ fn dispatch(request: &str) -> Result<Value, String> {
             }
             with_state(|st| call(st, &method, args))
         }
+        "spawn_hidden" => spawn_hidden(args),
         m if m.starts_with("net_") => net_call(m, args),
         _ => with_state(|st| call(st, &method, args)),
     }
+}
+
+/// Запуск процесса, который переживёт приложение (скрипт установки обновления).
+/// `{"program": "...", "args": ["..."]}` -> `{"pid": N}`.
+///
+/// На Windows процесс запускается со скрытой консолью (`CREATE_NO_WINDOW`), а не
+/// без консоли вовсе: `Process.start(mode: detached)` в Dart даёт `DETACHED_PROCESS`,
+/// и PowerShell 5.1 с ним молча завершается, не выполнив скрипт.
+fn spawn_hidden(args: &Value) -> Result<Value, String> {
+    use std::process::{Command, Stdio};
+    let program = arg_str(args, "program")?;
+    let list: Vec<String> = match &args["args"] {
+        Value::Null => Vec::new(),
+        Value::Array(a) => a
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or("args: нужны строки"))
+            .collect::<Result<_, _>>()?,
+        _ => return Err("args: нужен список строк".to_string()),
+    };
+    let mut cmd = Command::new(&program);
+    cmd.args(&list)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("не удалось запустить {program}: {e}"))?;
+    // процесс не ждём: он должен работать и после выхода приложения
+    Ok(json!({ "pid": child.id() }))
 }
 
 /// Обрабатывает один запрос. Вынесено из C-обёртки, чтобы тестироваться без FFI.
@@ -446,6 +483,50 @@ mod tests {
         let v = call_json(method, args);
         assert_eq!(v["ok"], true, "{method} failed: {v}");
         v["result"].clone()
+    }
+
+    /// Процесс, запущенный `spawn_hidden`, действительно выполняется (на Windows -
+    /// PowerShell, который с `DETACHED_PROCESS` молча завершался).
+    #[test]
+    fn spawn_hidden_runs_the_program() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("out.txt");
+        let path = out.to_string_lossy().to_string();
+        let (program, args) = if cfg!(windows) {
+            (
+                "powershell.exe",
+                json!([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    format!("Set-Content -LiteralPath '{path}' -Value ok"),
+                ]),
+            )
+        } else {
+            ("sh", json!(["-c", format!("echo ok > '{path}'")]))
+        };
+        let r = ok("spawn_hidden", json!({ "program": program, "args": args }));
+        assert!(r["pid"].as_u64().unwrap_or(0) > 0, "нет pid: {r}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !out.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(out.exists(), "запущенный процесс не выполнился");
+    }
+
+    #[test]
+    fn spawn_hidden_rejects_bad_requests() {
+        let v = call_json("spawn_hidden", json!({ "args": [] }));
+        assert_eq!(v["ok"], false);
+        let v = call_json("spawn_hidden", json!({ "program": "x", "args": [1] }));
+        assert_eq!(v["ok"], false);
+        let v = call_json(
+            "spawn_hidden",
+            json!({ "program": "hydra-no-such-program-xyz", "args": [] }),
+        );
+        assert_eq!(v["ok"], false);
     }
 
     #[test]
