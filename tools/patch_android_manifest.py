@@ -49,6 +49,8 @@ PERMISSIONS = [
     "android.permission.RECEIVE_BOOT_COMPLETED",
     "android.permission.MANAGE_EXTERNAL_STORAGE",
     "android.permission.CAMERA",
+    # автообновление: установка скачанного APK через системный установщик
+    "android.permission.REQUEST_INSTALL_PACKAGES",
 ]
 
 SERVICE_XML = """        <service android:name="com.ryanheise.audioservice.AudioService"
@@ -181,8 +183,10 @@ class SyncService : Service() {
 
 MAIN_ACTIVITY_KT = """package __PKG__
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.BatteryManager
@@ -195,20 +199,80 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
     private var channel: MethodChannel? = null
+    private var updates: MethodChannel? = null
     private var pendingLink: String? = null
+
+    companion object {
+        private const val INSTALL_ACTION = "hydra.UPDATE_STATUS"
+    }
 
     private fun linkOf(intent: Intent?): String? {
         val data = intent?.data ?: return null
         return if (data.scheme == "hydra") data.toString() else null
     }
 
+    /** Ответ системного установщика на сеанс установки обновления. */
+    private fun handleInstallStatus(intent: Intent?): Boolean {
+        if (intent == null || intent.action != INSTALL_ACTION) return false
+        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        when (status) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                }
+                if (confirm != null) {
+                    try {
+                        startActivity(confirm)
+                    } catch (e: Exception) {
+                        updates?.invokeMethod("installFailed", e.message ?: e.toString())
+                    }
+                }
+            }
+            PackageInstaller.STATUS_SUCCESS -> {
+                // Android сейчас закроет приложение и поставит новую версию
+            }
+            PackageInstaller.STATUS_FAILURE_ABORTED -> updates?.invokeMethod("installFailed", "установка отменена")
+            else -> updates?.invokeMethod(
+                "installFailed",
+                intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "код $status"
+            )
+        }
+        return true
+    }
+
+    /** Сеанс установки: APK копируется в установщик, система спрашивает подтверждение. */
+    private fun installApk(path: String) {
+        val file = java.io.File(path)
+        val installer = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        params.setAppPackageName(packageName)
+        val id = installer.createSession(params)
+        installer.openSession(id).use { session ->
+            file.inputStream().use { input ->
+                session.openWrite("hydra.apk", 0, file.length()).use { out ->
+                    input.copyTo(out)
+                    session.fsync(out)
+                }
+            }
+            val status = Intent(this, MainActivity::class.java).setAction(INSTALL_ACTION)
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            val pi = PendingIntent.getActivity(this, 4712, status, flags)
+            session.commit(pi.intentSender)
+        }
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
-        pendingLink = linkOf(intent)
+        if (!handleInstallStatus(intent)) pendingLink = linkOf(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (handleInstallStatus(intent)) return
         val link = linkOf(intent) ?: return
         val ch = channel
         if (ch != null) ch.invokeMethod("link", link) else pendingLink = link
@@ -274,6 +338,42 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+        val up = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hydra/update")
+        updates = up
+        up.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "canInstall" -> result.success(
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
+                )
+                "openInstallSettings" -> {
+                    try {
+                        val i = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                        i.data = Uri.parse("package:" + packageName)
+                        startActivity(i)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "install" -> {
+                    val path = call.argument<String>("path")
+                    if (path == null) {
+                        result.error("install", "нет пути к файлу", null)
+                    } else {
+                        // копирование 90 МБ - не в главном потоке
+                        Thread {
+                            try {
+                                installApk(path)
+                                runOnUiThread { result.success(true) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("install", e.message ?: e.toString(), null) }
+                            }
+                        }.start()
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 }
 """

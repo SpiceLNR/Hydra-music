@@ -151,6 +151,15 @@ jobs:
               --target "$GITHUB_SHA" || true
           gh release upload latest app/build/app/outputs/flutter-apk/app-release.apk \
             --repo "$GITHUB_REPOSITORY" --clobber
+          # описание для автообновления: выкладывается после APK
+          APK=app/build/app/outputs/flutter-apk/app-release.apk
+          VER=$(grep -m1 '^version:' app/pubspec.yaml | sed 's/^version: *//; s/+.*//' | tr -d '\r')
+          SHA=$(sha256sum < "$APK" | cut -d' ' -f1)
+          echo "$SHA" | grep -Eq '^[0-9a-f]{64}$' || { echo "Неверный SHA-256: $SHA"; exit 1; }
+          printf '{"version":"%s","build":"%s","file":"app-release.apk","size":%s,"sha256":"%s"}\n' \
+            "$VER" "$GITHUB_SHA" "$(stat -c %s "$APK")" "$SHA" > version-android.json
+          cat version-android.json
+          gh release upload latest version-android.json --repo "$GITHUB_REPOSITORY" --clobber
       # Скачиваем опубликованный файл и сверяем с собранным: сборка падает при расхождении.
       - name: Check the published APK
         if: github.ref == 'refs/heads/main'

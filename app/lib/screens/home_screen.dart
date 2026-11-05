@@ -5,6 +5,7 @@ import '../theme.dart';
 import '../widgets/held_banner.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
+import '../widgets/update_banner.dart';
 import 'devices_screen.dart';
 import 'playlists_screen.dart';
 import 'settings_screen.dart';
@@ -108,7 +109,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           },
         ),
       ),
-      bottomNavigationBar: const NowPlayingBar(safeBottom: true),
+      // плашка обновления внизу, сразу над полосой плеера
+      bottomNavigationBar: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [UpdateBanner(), NowPlayingBar(safeBottom: true)],
+      ),
     );
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../player_service.dart';
@@ -17,7 +19,9 @@ class UpdateBanner extends StatelessWidget {
       final ok = await confirmAction(
         context,
         title: 'Установить обновление?',
-        message: 'Воспроизведение прервётся: программа закроется и сразу запустится в новой версии.',
+        message: Platform.isAndroid
+            ? 'Воспроизведение прервётся: Android закроет приложение на время установки.'
+            : 'Воспроизведение прервётся: программа закроется и сразу запустится в новой версии.',
         confirmLabel: 'Установить',
       );
       if (!ok) return;
@@ -83,7 +87,9 @@ class UpdateBanner extends StatelessWidget {
             title('Версия ${i.version} готова');
             dim(u.error != null
                 ? 'Не удалось установить: ${u.error}'
-                : 'Программа закроется на пару секунд и запустится уже обновлённой.');
+                : Platform.isAndroid
+                    ? 'Android попросит подтвердить установку. После неё откройте приложение снова.'
+                    : 'Программа закроется на пару секунд и запустится уже обновлённой.');
             buttons([ElevatedButton(onPressed: () => _install(context), child: const Text('Установить'))]);
           case UpdateState.installing:
             title('Устанавливаю версию ${i.version}…');

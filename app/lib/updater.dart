@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'build_info.dart';
 import 'core_bridge.dart';
@@ -54,9 +56,17 @@ int compareVersions(String a, String b) {
   return 0;
 }
 
-/// Автообновление на Windows.
+/// Автообновление (Windows и Android).
 ///
-/// Проверка при запуске и раз в 6 часов: `version-windows.json` из релиза `latest`.
+/// Проверка при запуске и раз в 6 часов: `version-windows.json` или
+/// `version-android.json` из релиза `latest`.
+///
+/// Android: APK качается с докачкой в папку данных приложения (`update/`), сверяется
+/// SHA-256, «Установить» передаёт файл системному установщику (сеанс PackageInstaller,
+/// канал `hydra/update` в MainActivity). Android спрашивает подтверждение, а в первый раз
+/// разрешение «Установка неизвестных приложений». После установки приложение закрывается.
+///
+/// Windows:
 /// Архив качается с докачкой в `<папка программы>.update`, сверяется SHA-256 и
 /// распаковывается в `<папка программы>.new`, пока программа работает. «Установить»
 /// запускает скрипт PowerShell и закрывает программу; скрипт дожидается выхода,
@@ -69,8 +79,11 @@ class UpdateService extends ChangeNotifier {
   static final UpdateService instance = UpdateService._();
 
   static const _baseUrl = 'https://github.com/SpiceLNR/Hydra-music/releases/download/latest/';
-  static const _manifest = 'version-windows.json';
   static const checkEvery = Duration(hours: 6);
+  static const MethodChannel _android = MethodChannel('hydra/update');
+
+  static String get _manifest => Platform.isAndroid ? 'version-android.json' : 'version-windows.json';
+  static String get _ext => Platform.isAndroid ? 'apk' : 'zip';
 
   UpdateState state = UpdateState.idle;
   UpdateInfo? info;
@@ -87,21 +100,44 @@ class UpdateService extends ChangeNotifier {
   bool _dropPart = false;
 
   /// Обновляются только сборки из CI: у локальных нет номера коммита.
-  bool get supported => Platform.isWindows && kBuild != 'локальная';
+  bool get supported => (Platform.isWindows || Platform.isAndroid) && kBuild != 'локальная';
 
   static String get _sep => Platform.pathSeparator;
   Directory get _appDir => File(Platform.resolvedExecutable).parent;
   String get _exeName => Platform.resolvedExecutable.split(_sep).last;
   String get _newPath => '${_appDir.path}.new';
   String get _prevPath => '${_appDir.path}.prev';
-  Directory get _updateDir => Directory('${_appDir.path}.update');
-  String _partPath(UpdateInfo i) => '${_updateDir.path}$_sep${i.version}.zip.part';
-  String _zipPath(UpdateInfo i) => '${_updateDir.path}$_sep${i.version}.zip';
+
+  /// Windows: `<папка программы>.update`; Android: `update/` в данных приложения.
+  Directory? _dir;
+  Directory get _updateDir => _dir!;
+  String _partPath(UpdateInfo i) => '${_updateDir.path}$_sep${i.version}.$_ext.part';
+  String _zipPath(UpdateInfo i) => '${_updateDir.path}$_sep${i.version}.$_ext';
 
   void start() {
     if (_started || !supported) return;
     _started = true;
-    unawaited(_cleanup().whenComplete(check));
+    unawaited(_init());
+  }
+
+  Future<void> _init() async {
+    try {
+      if (Platform.isAndroid) {
+        final support = await getApplicationSupportDirectory();
+        _dir = Directory('${support.path}${_sep}update');
+        _android.setMethodCallHandler((call) async {
+          if (call.method == 'installFailed' && state == UpdateState.installing) {
+            _set(UpdateState.ready, err: '${call.arguments ?? 'неизвестная ошибка'}');
+          }
+        });
+      } else {
+        _dir = Directory('${_appDir.path}.update');
+      }
+    } catch (_) {
+      return; // без папки обновлений проверка не нужна
+    }
+    await _cleanup();
+    await check();
     _timer = Timer.periodic(checkEvery, (_) => check());
   }
 
@@ -121,15 +157,17 @@ class UpdateService extends ChangeNotifier {
   /// архивы версий не новее текущей). Недокачанный архив более новой версии остаётся.
   Future<void> _cleanup() async {
     try {
-      final nd = Directory(_newPath);
-      if (await nd.exists()) await nd.delete(recursive: true);
+      if (Platform.isWindows) {
+        final nd = Directory(_newPath);
+        if (await nd.exists()) await nd.delete(recursive: true);
+      }
       final ud = _updateDir;
       if (!await ud.exists()) return;
       await for (final e in ud.list()) {
         final name = e.path.split(_sep).last;
         if (name == 'install.log') continue;
-        final ver = name.split('.zip').first;
-        if (!name.contains('.zip') || compareVersions(ver, kVersion) <= 0) {
+        final ver = name.split('.$_ext').first;
+        if (!name.contains('.$_ext') || compareVersions(ver, kVersion) <= 0) {
           await e.delete(recursive: true);
         }
       }
@@ -141,7 +179,7 @@ class UpdateService extends ChangeNotifier {
   Future<void> _dropOtherVersions(String keep) async {
     await for (final e in _updateDir.list()) {
       final name = e.path.split(_sep).last;
-      if (name == 'install.log' || name.startsWith('$keep.zip')) continue;
+      if (name == 'install.log' || name.startsWith('$keep.$_ext')) continue;
       try {
         await e.delete(recursive: true);
       } catch (_) {}
@@ -283,7 +321,8 @@ class UpdateService extends ChangeNotifier {
       final zip = File(_zipPath(i));
       if (await zip.exists()) await zip.delete();
       await part.rename(zip.path);
-      await _extract(zip.path);
+      // на Android APK ставится как есть, на Windows архив распаковывается заранее
+      if (Platform.isWindows) await _extract(zip.path);
       _set(UpdateState.ready);
     } catch (e) {
       try {
@@ -375,9 +414,11 @@ class UpdateService extends ChangeNotifier {
     }
   }
 
-  /// «Установить»: запускает скрипт замены и закрывает программу.
+  /// «Установить». Windows: запускает скрипт замены и закрывает программу.
+  /// Android: передаёт APK системному установщику.
   Future<void> install() async {
     if (state != UpdateState.ready) return;
+    if (Platform.isAndroid) return _installAndroid();
     _set(UpdateState.installing);
     try {
       if (!await _canWrite()) {
@@ -393,6 +434,27 @@ class UpdateService extends ChangeNotifier {
         'args': ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script.path],
       });
       exit(0);
+    } catch (e) {
+      _set(UpdateState.ready, err: _short(e));
+    }
+  }
+
+  Future<void> _installAndroid() async {
+    final i = info;
+    if (i == null) return;
+    try {
+      final can = await _android.invokeMethod<bool>('canInstall') ?? false;
+      if (!can) {
+        await _android.invokeMethod<bool>('openInstallSettings');
+        _set(UpdateState.ready,
+            err: 'разрешите Hydra Music устанавливать приложения и нажмите «Установить» ещё раз');
+        return;
+      }
+      _set(UpdateState.installing);
+      await _android.invokeMethod<bool>('install', {'path': _zipPath(i)});
+      // дальше системный диалог; при отмене или ошибке придёт installFailed
+    } on PlatformException catch (e) {
+      _set(UpdateState.ready, err: e.message ?? e.code);
     } catch (e) {
       _set(UpdateState.ready, err: _short(e));
     }

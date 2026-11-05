@@ -30,9 +30,9 @@ Future<void> main() async {
   if (Platform.isWindows) {
     // окно показывается только после первого кадра: без белой вспышки при запуске
     WidgetsBinding.instance.addPostFrameCallback((_) => DockController.instance.reveal());
-    // проверка новой версии: сейчас и раз в 6 часов (только сборки из CI)
-    UpdateService.instance.start();
   }
+  // проверка новой версии: сейчас и раз в 6 часов (Windows и Android, только сборки из CI)
+  UpdateService.instance.start();
 }
 
 class HydraApp extends StatelessWidget {
