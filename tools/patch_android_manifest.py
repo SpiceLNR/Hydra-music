@@ -356,6 +356,20 @@ def patch_activity() -> int:
     return 0
 
 
+SIGNING_MARK = "// Hydra: постоянный ключ подписи"
+SIGNING_BLOCK = f"""
+{SIGNING_MARK}
+System.getenv("HYDRA_KEYSTORE")?.takeIf {{ it.isNotEmpty() }}?.let {{ ks ->
+    val hydraSigning = android.signingConfigs.getByName("debug")
+    hydraSigning.storeFile = file(ks)
+    hydraSigning.storePassword = "android"
+    hydraSigning.keyAlias = "androiddebugkey"
+    hydraSigning.keyPassword = "android"
+    android.buildTypes.getByName("release").signingConfig = hydraSigning
+}}
+"""
+
+
 def patch_gradle() -> int:
     if not GRADLE_KTS.exists():
         print(f"Не найден {GRADLE_KTS}.")
@@ -373,7 +387,18 @@ def patch_gradle() -> int:
     else:
         print(f"compileSdk: уже {COMPILE_SDK}")
 
-    props = GRADLE_PROPS.read_text(encoding="utf-8") if GRADLE_PROPS.exists() else ""
+    # Постоянный ключ подписи: путь к нему CI передаёт в HYDRA_KEYSTORE.
+    # Раньше ключ просто клали в ~/.android/debug.keystore, но Gradle ищет его там,
+    # куда указывает окружение раннера (ANDROID_USER_HOME и т. п.), и при смене образа
+    # мог создать новый временный ключ. Тогда APK не ставится поверх прежней версии.
+    text = GRADLE_KTS.read_text(encoding="utf-8")
+    if SIGNING_MARK not in text:
+        GRADLE_KTS.write_text(text.rstrip("\n") + "\n" + SIGNING_BLOCK, encoding="utf-8")
+        print("Подпись: путь к ключу берётся из HYDRA_KEYSTORE")
+    else:
+        print("Подпись: уже настроена")
+
+    props =GRADLE_PROPS.read_text(encoding="utf-8") if GRADLE_PROPS.exists() else ""
     wanted = [
         f"android.suppressUnsupportedCompileSdk={COMPILE_SDK}",
         # Kotlin компилируется внутри процесса Gradle: фоновый демон Kotlin на сборке

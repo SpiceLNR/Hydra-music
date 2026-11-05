@@ -84,15 +84,29 @@ jobs:
       # Постоянный ключ подписи: без него каждый запуск CI создаёт новый ключ,
       # и Android не даёт обновить приложение поверх прежней сборки.
       # Ключ хранится в секрете репозитория HYDRA_KEYSTORE_B64 (base64 файла keystore),
-      # в самом репозитории его нет. Если секрета нет (например, в чужом форке),
-      # Flutter создаст временный ключ сам.
+      # в самом репозитории его нет. Путь к ключу передаётся Gradle явно (HYDRA_KEYSTORE,
+      # см. patch_android_manifest.py): от того, где раннер ищет debug.keystore, подпись
+      # больше не зависит. В основном репозитории без секрета сборка падает;
+      # в чужом форке Flutter создаст временный ключ сам.
       - name: Use a fixed signing key
         env:
           HYDRA_KEYSTORE_B64: ${{ secrets.HYDRA_KEYSTORE_B64 }}
         run: |
           if [ -n "$HYDRA_KEYSTORE_B64" ]; then
+            KS="$RUNNER_TEMP/hydra.keystore"
+            echo "$HYDRA_KEYSTORE_B64" | base64 -d > "$KS"
             mkdir -p ~/.android
-            echo "$HYDRA_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            cp "$KS" ~/.android/debug.keystore
+            echo "HYDRA_KEYSTORE=$KS" >> "$GITHUB_ENV"
+            echo "ANDROID_USER_HOME=${ANDROID_USER_HOME:-<не задан>}"
+            fp=$(keytool -list -v -keystore "$KS" -storepass android -alias androiddebugkey \
+              | grep -m1 'SHA256:' | sed 's/.*SHA256: *//; s/://g' | tr 'A-F' 'a-f')
+            [ -n "$fp" ] || { echo "Ключ из секрета не открылся (пароль android, псевдоним androiddebugkey)"; exit 1; }
+            echo "Отпечаток ключа из секрета (SHA-256): $fp"
+            echo "HYDRA_KEY_SHA256=$fp" >> "$GITHUB_ENV"
+          elif [ "$GITHUB_REPOSITORY" = "SpiceLNR/Hydra-music" ]; then
+            echo "Секрета HYDRA_KEYSTORE_B64 нет: APK со временным ключом не встанет поверх прежнего"
+            exit 1
           else
             echo "Секрета HYDRA_KEYSTORE_B64 нет: ключ подписи будет временным"
           fi
@@ -111,11 +125,19 @@ jobs:
       - name: Build release APK
         working-directory: app
         run: flutter build apk --release --no-shrink --dart-define=HYDRA_BUILD=${{ github.sha }}
-      # Подпись APK проверяется до публикации: битый файл в релиз не попадает.
+      # Подпись APK проверяется до публикации: битый файл и файл, подписанный
+      # не ключом из секрета, в релиз не попадают.
       - name: Verify APK signature
         run: |
           APKSIGNER=$(ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner | sort -V | tail -1)
-          "$APKSIGNER" verify --verbose app/build/app/outputs/flutter-apk/app-release.apk
+          APK=app/build/app/outputs/flutter-apk/app-release.apk
+          "$APKSIGNER" verify --verbose "$APK"
+          apk_fp=$("$APKSIGNER" verify --print-certs "$APK" | grep -m1 'certificate SHA-256 digest' | sed 's/.*digest: *//')
+          echo "Отпечаток подписи APK (SHA-256): $apk_fp"
+          if [ -n "$HYDRA_KEY_SHA256" ] && [ "$apk_fp" != "$HYDRA_KEY_SHA256" ]; then
+            echo "APK подписан не ключом из секрета ($HYDRA_KEY_SHA256): на телефон поверх прежней версии он не встанет"
+            exit 1
+          fi
       # Основной способ получить APK: страница Releases -> «Latest build».
       # Файлы релиза не входят в квоту хранилища артефактов.
       - name: Publish APK to the latest release

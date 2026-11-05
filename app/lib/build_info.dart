@@ -1,5 +1,5 @@
 /// Версия приложения. Хронику изменений см. в CHANGELOG.md.
-const String kVersion = '0.25.3';
+const String kVersion = '0.25.4';
 
 const String _raw = String.fromEnvironment('HYDRA_BUILD', defaultValue: 'локальная');
 
