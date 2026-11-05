@@ -227,7 +227,10 @@ jobs:
           7z l "$Z" | grep -q ' hydra_music\.exe$' || { echo "В архиве нет hydra_music.exe в корне"; exit 1; }
           VER=$(grep -m1 '^version:' app/pubspec.yaml | sed 's/^version: *//; s/+.*//' | tr -d '\r')
           SIZE=$(stat -c %s "$Z")
-          SHA=$(sha256sum "$Z" | cut -d' ' -f1)
+          # из потока, а не по имени: для пути с обратными слэшами sha256sum ставит перед
+          # хэшем «\», и приложение такое описание отвергает
+          SHA=$(sha256sum < "$Z" | cut -d' ' -f1)
+          echo "$SHA" | grep -Eq '^[0-9a-f]{64}$' || { echo "Неверный SHA-256: $SHA"; exit 1; }
           printf '{"version":"%s","build":"%s","file":"hydra-music-windows.zip","size":%s,"sha256":"%s"}\n' \
             "$VER" "$GITHUB_SHA" "$SIZE" "$SHA" > version-windows.json
           cat version-windows.json
