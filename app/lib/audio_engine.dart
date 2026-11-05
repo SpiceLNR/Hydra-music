@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:media_kit/media_kit.dart' as mk;
+import 'l10n/l10n.dart';
 
 /// Звуковой движок под плеером. Android: системный ExoPlayer (just_audio): он экономнее
 /// к батарее, без заиканий и надёжно работает с Bluetooth. Windows: mpv (media_kit).
@@ -61,9 +62,9 @@ class JustAudioEngine implements AudioEngine {
   static String _describe(Object e) {
     if (e is ja.PlayerException) {
       final m = e.message;
-      return (m == null || m.isEmpty) ? 'код ${e.code}' : m;
+      return (m == null || m.isEmpty) ? tr('код {code}', {'code': e.code}) : m;
     }
-    if (e is ja.PlayerInterruptedException) return 'загрузка прервана';
+    if (e is ja.PlayerInterruptedException) return tr('загрузка прервана');
     return e.toString();
   }
 

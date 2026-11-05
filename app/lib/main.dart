@@ -11,6 +11,7 @@ import 'desktop/desktop_settings.dart';
 import 'desktop/desktop_shell.dart';
 import 'desktop/dock_controller.dart';
 import 'desktop/tray.dart';
+import 'l10n/l10n.dart';
 import 'library_controller.dart';
 import 'player_service.dart';
 import 'screens/home_screen.dart';
@@ -19,6 +20,9 @@ import 'updater.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // язык интерфейса: как в системе или выбранный в настройках
+  await L10n.instance.load();
+  WidgetsBinding.instance.addObserver(_LocaleWatcher());
   // mpv нужен только на Windows; на Android играет ExoPlayer
   if (!Platform.isAndroid) MediaKit.ensureInitialized();
   if (Platform.isWindows) {
@@ -43,12 +47,27 @@ Future<void> main(List<String> args) async {
   UpdateService.instance.start();
 }
 
+/// Язык системы сменился: при выборе «как в системе» интерфейс переключается сам.
+class _LocaleWatcher with WidgetsBindingObserver {
+  @override
+  void didChangeLocales(List<Locale>? locales) => L10n.instance.systemLocaleChanged();
+}
+
 class HydraApp extends StatelessWidget {
   const HydraApp({super.key});
 
   @override
   Widget build(BuildContext context) {
+    // при смене языка дерево интерфейса строится заново (ключ), чтобы перевелись все экраны
+    return ListenableBuilder(
+      listenable: L10n.instance,
+      builder: (context, _) => _app(),
+    );
+  }
+
+  Widget _app() {
     return MaterialApp(
+      key: ValueKey(L10n.instance.lang),
       title: 'Hydra Music',
       scaffoldMessengerKey: messengerKey,
       debugShowCheckedModeBanner: false,

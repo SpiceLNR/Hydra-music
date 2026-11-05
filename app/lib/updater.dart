@@ -10,6 +10,7 @@ import 'package:tray_manager/tray_manager.dart' show trayManager;
 
 import 'build_info.dart';
 import 'core_bridge.dart';
+import 'l10n/l10n.dart';
 
 /// Этапы обновления. Плашка на главном экране показывает каждый по-своему.
 enum UpdateState { idle, available, downloading, paused, preparing, ready, installing, error }
@@ -132,7 +133,7 @@ class UpdateService extends ChangeNotifier {
         _dir = Directory('${support.path}${_sep}update');
         _android.setMethodCallHandler((call) async {
           if (call.method == 'installFailed' && state == UpdateState.installing) {
-            _set(UpdateState.ready, err: '${call.arguments ?? 'неизвестная ошибка'}');
+            _set(UpdateState.ready, err: '${call.arguments ?? tr('неизвестная ошибка')}');
           }
         });
       } else {
@@ -207,7 +208,7 @@ class UpdateService extends ChangeNotifier {
       if (loc == null) break;
       uri = uri.resolve(loc);
     }
-    throw const HttpException('слишком много перенаправлений');
+    throw HttpException(tr('слишком много перенаправлений'));
   }
 
   /// Когда последний раз удалось прочитать описание версии (для экрана настроек).
@@ -294,7 +295,7 @@ class UpdateService extends ChangeNotifier {
           from = 0; // сервер не умеет докачку: начинаем сначала
         } else if (res.statusCode != 206) {
           await res.drain<void>();
-          throw HttpException('сервер ответил ${res.statusCode}');
+          throw HttpException(tr('сервер ответил {statusCode}', {'statusCode': res.statusCode}));
         }
         received = from;
         final out = part.openWrite(mode: from == 0 ? FileMode.write : FileMode.append);
@@ -340,13 +341,13 @@ class UpdateService extends ChangeNotifier {
       }
 
       final got = await part.length();
-      if (got < i.size) throw const HttpException('загрузка прервалась');
+      if (got < i.size) throw HttpException(tr('загрузка прервалась'));
       _set(UpdateState.preparing);
       final digest = await sha256.bind(part.openRead()).first;
       if (digest.toString() != i.sha256) {
         await part.delete();
         received = 0;
-        throw const FileSystemException('файл повреждён, скачайте заново');
+        throw FileSystemException(tr('файл повреждён, скачайте заново'));
       }
       final zip = File(_zipPath(i));
       if (await zip.exists()) await zip.delete();
@@ -428,7 +429,7 @@ class UpdateService extends ChangeNotifier {
       try {
         await nd.delete(recursive: true);
       } catch (_) {}
-      throw const FileSystemException('не удалось распаковать архив');
+      throw FileSystemException(tr('не удалось распаковать архив'));
     }
   }
 
@@ -452,7 +453,7 @@ class UpdateService extends ChangeNotifier {
     _set(UpdateState.installing);
     try {
       if (!await _canWrite()) {
-        throw const FileSystemException('нет прав на запись в папку программы');
+        throw FileSystemException(tr('нет прав на запись в папку программы'));
       }
       final script = File('${_updateDir.path}${_sep}install.ps1');
       // PowerShell 5 читает файл без BOM в кодировке ANSI: пути с кириллицей сломались бы
@@ -484,7 +485,7 @@ class UpdateService extends ChangeNotifier {
       if (!can) {
         await _android.invokeMethod<bool>('openInstallSettings');
         _set(UpdateState.ready,
-            err: 'разрешите Hydra Music устанавливать приложения и нажмите «Установить» ещё раз');
+            err: tr('разрешите Hydra Music устанавливать приложения и нажмите «Установить» ещё раз'));
         return;
       }
       _set(UpdateState.installing);
@@ -577,9 +578,9 @@ Start-Process -FilePath (Join-Path \$app \$exe) -WorkingDirectory \$home_
         : e is HttpException
             ? e.message
             : e is SocketException
-                ? 'нет связи с GitHub'
+                ? tr('нет связи с GitHub')
                 : e is TimeoutException
-                    ? 'GitHub не отвечает'
+                    ? tr('GitHub не отвечает')
                     : '$e';
     if (s.length > 120) s = '${s.substring(0, 120)}…';
     return s;

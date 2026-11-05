@@ -10,6 +10,7 @@ import '../player_service.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/play_mode_bar.dart';
+import '../l10n/l10n.dart';
 
 String _fmt(Duration d) {
   final m = d.inMinutes;
@@ -53,8 +54,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       ));
       if (mounted) {
         _toast(written
-            ? 'Сохранено, теги записаны в файл.'
-            : 'Этот формат не хранит теги: изменения сохранены только в приложении.');
+            ? tr('Сохранено, теги записаны в файл.')
+            : tr('Этот формат не хранит теги: изменения сохранены только в приложении.'));
       }
     } on CoreException catch (e) {
       if (mounted) _toast(e.message);
@@ -70,8 +71,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         final track = ps.current;
         if (track == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('плеер')),
-            body: const Center(child: Text('Ничего не играет')),
+            appBar: AppBar(title: Text(tr('плеер'))),
+            body: Center(child: Text(tr('Ничего не играет'))),
           );
         }
         final max = ps.duration.inMilliseconds > 0 ? ps.duration.inMilliseconds.toDouble() : 1.0;
@@ -80,10 +81,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
         final buttonStyle = ElevatedButton.styleFrom(backgroundColor: accent);
         return Scaffold(
           appBar: AppBar(
-            title: const Text('плеер'),
+            title: Text(tr('плеер')),
             actions: [
               IconButton(
-                tooltip: 'Настройки трека',
+                tooltip: tr('Настройки трека'),
                 icon: const Icon(Icons.settings, color: Metro.textDim),
                 onPressed: () => _openSettings(track),
               ),
@@ -247,7 +248,7 @@ class _TrackSettingsDialogState extends State<_TrackSettingsDialog> {
     try {
       picked = await ImagePicker().pickImage(source: ImageSource.gallery);
     } catch (e) {
-      setState(() => _coverNote = 'Не удалось открыть выбор картинки: $e');
+      setState(() => _coverNote = tr('Не удалось открыть выбор картинки: {e}', {'e': e}));
       return;
     }
     if (picked == null) return;
@@ -257,7 +258,7 @@ class _TrackSettingsDialogState extends State<_TrackSettingsDialog> {
     });
     try {
       await hydraLibrary.setCover(widget.track.id, picked.path);
-      if (mounted) setState(() => _coverNote = 'Обложка записана в файл.');
+      if (mounted) setState(() => _coverNote = tr('Обложка записана в файл.'));
     } on CoreException catch (e) {
       if (mounted) setState(() => _coverNote = e.message);
     } finally {
@@ -268,7 +269,7 @@ class _TrackSettingsDialogState extends State<_TrackSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Настройки трека', style: TextStyle(fontWeight: FontWeight.w300, fontSize: 24)),
+      title: Text(tr('Настройки трека'), style: TextStyle(fontWeight: FontWeight.w300, fontSize: 24)),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -279,7 +280,7 @@ class _TrackSettingsDialogState extends State<_TrackSettingsDialog> {
               child: OutlinedButton.icon(
                 onPressed: _busy ? null : _pickCover,
                 icon: const Icon(Icons.image_outlined),
-                label: const Text('Изменить обложку'),
+                label: Text(tr('Изменить обложку')),
               ),
             ),
             if (_coverNote != null)
@@ -290,23 +291,23 @@ class _TrackSettingsDialogState extends State<_TrackSettingsDialog> {
             const SizedBox(height: 16),
             TextField(
               controller: _title,
-              decoration: Metro.inputDecoration(hint: 'Название композиции'),
+              decoration: Metro.inputDecoration(hint: tr('Название композиции')),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _artist,
-              decoration: Metro.inputDecoration(hint: 'Исполнитель'),
+              decoration: Metro.inputDecoration(hint: tr('Исполнитель')),
             ),
           ],
         ),
       ),
       actions: [
-        OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+        OutlinedButton(onPressed: () => Navigator.pop(context), child: Text(tr('Отмена'))),
         ElevatedButton(
           onPressed: _busy
               ? null
               : () => Navigator.pop(context, _TrackEdit(_title.text, _artist.text)),
-          child: const Text('Сохранить'),
+          child: Text(tr('Сохранить')),
         ),
       ],
     );

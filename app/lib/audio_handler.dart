@@ -5,6 +5,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 
 import 'models.dart';
+import 'l10n/l10n.dart';
 
 /// Всё, чем фоновая служба (уведомление, экран блокировки, наушники) управляет в плеере.
 abstract interface class PlayerControls {
@@ -176,9 +177,9 @@ Future<HydraAudioHandler?> initBackgroundPlayback(PlayerControls controls) async
 
     return await AudioService.init<HydraAudioHandler>(
       builder: () => HydraAudioHandler(controls),
-      config: const AudioServiceConfig(
+      config: AudioServiceConfig(
         androidNotificationChannelId: 'com.spicelnr.hydra_music.playback',
-        androidNotificationChannelName: 'Воспроизведение',
+        androidNotificationChannelName: tr('Воспроизведение'),
         androidNotificationOngoing: true,
       ),
     );

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'l10n/l10n.dart';
 
 /// Короткая справка о файле для сообщения об ошибке воспроизведения:
 /// есть ли файл, его размер и начало (по нему видно настоящий формат и обрыв загрузки).
@@ -18,23 +19,23 @@ Future<String> probeFile(String path) async {
           if (Uri.decodeComponent(n).startsWith(Uri.decodeComponent(head))) similar.add(n);
           if (similar.length >= 3) break;
         }
-        if (similar.isNotEmpty) hint = '; рядом: ${similar.join(' | ')}';
+        if (similar.isNotEmpty) hint = tr('; рядом: {a1}', {'a1': similar.join(' | ')});
       }
-      return 'файла нет по пути «$path»$hint';
+      return tr('файла нет по пути «{path}»{hint}', {'path': path, 'hint': hint});
     }
     final size = await file.length();
-    if (size == 0) return 'файл пустой (0 байт)';
+    if (size == 0) return tr('файл пустой (0 байт)');
     final raf = await file.open();
     try {
       final head = await raf.read(16);
       final hex = head.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
       final ascii = String.fromCharCodes(head.map((b) => (b >= 32 && b < 127) ? b : 46));
       final mb = (size / (1024 * 1024)).toStringAsFixed(1);
-      return 'файл $mb МБ, начало: $ascii ($hex)';
+      return tr('файл {mb} МБ, начало: {ascii} ({hex})', {'mb': mb, 'ascii': ascii, 'hex': hex});
     } finally {
       await raf.close();
     }
   } catch (e) {
-    return 'файл не прочитался: $e';
+    return tr('файл не прочитался: {e}', {'e': e});
   }
 }

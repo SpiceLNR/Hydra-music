@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'dock_controller.dart';
+import '../l10n/l10n.dart';
 
 /// Значок Hydra Music в области уведомлений Windows (трей).
 ///
@@ -23,17 +24,21 @@ class HydraTray with TrayListener {
     try {
       await trayManager.setIcon('assets/tray.ico');
       await trayManager.setToolTip('Hydra Music');
-      await trayManager.setContextMenu(Menu(items: [
-        MenuItem(key: 'show', label: 'Показать'),
-        MenuItem.separator(),
-        MenuItem(key: 'exit', label: 'Выход'),
-      ]));
+      await _setMenu();
       trayManager.addListener(this);
+      // язык сменился - пункты меню на новом языке
+      L10n.instance.addListener(() => unawaited(_setMenu()));
       ready = true;
     } catch (_) {
       ready = false; // без значка всё работает, только крестик снова закрывает программу
     }
   }
+
+  Future<void> _setMenu() => trayManager.setContextMenu(Menu(items: [
+        MenuItem(key: 'show', label: tr('Показать')),
+        MenuItem.separator(),
+        MenuItem(key: 'exit', label: tr('Выход')),
+      ]));
 
   @override
   void onTrayIconMouseDown() {

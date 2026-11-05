@@ -11,6 +11,7 @@ import 'app_messenger.dart';
 import 'core_bridge.dart';
 import 'library_controller.dart';
 import 'models.dart';
+import 'l10n/l10n.dart';
 
 /// Данные для сопряжения: их показывает один телефон/ПК (в QR-коде) и вводит другой.
 class PairLink {
@@ -87,7 +88,7 @@ class PairLink {
     }
     return PairLink(
       deviceId: q['d'] ?? '',
-      name: q['n'] ?? 'устройство',
+      name: q['n'] ?? tr('устройство'),
       publicKey: key,
       secret: secret,
       port: port,
@@ -125,9 +126,9 @@ class NetService extends ChangeNotifier {
   String _hiddenError = '';
 
   static String _defaultName() {
-    if (Platform.isAndroid) return 'Телефон';
+    if (Platform.isAndroid) return tr('Телефон');
     final host = Platform.localHostname;
-    return host.isEmpty ? 'Компьютер' : host;
+    return host.isEmpty ? tr('Компьютер') : host;
   }
 
   /// Запускает или переключает службу переднего плана (Android).
@@ -135,7 +136,12 @@ class NetService extends ChangeNotifier {
   /// процесс жив и принимает подключения других устройств, но ничего не удерживает.
   Future<bool> _startService({required bool busy, String text = ''}) async {
     try {
-      final ok = await _service.invokeMethod<bool>('start', {'text': text, 'busy': busy});
+      // текст уведомления и название канала - на языке приложения
+      final shown = text.isNotEmpty
+          ? text
+          : (busy ? tr('Синхронизация') : tr('Автосинхронизация включена'));
+      final ok = await _service.invokeMethod<bool>(
+          'start', {'text': shown, 'busy': busy, 'channel': tr('Синхронизация')});
       return ok != false;
     } on PlatformException {
       return false;
@@ -440,10 +446,10 @@ class NetService extends ChangeNotifier {
     if (raw == null || raw.isEmpty) return;
     final link = PairLink.parse(raw);
     if (link == null) {
-      showAppMessage('Это не ссылка сопряжения Hydra Music');
+      showAppMessage(tr('Это не ссылка сопряжения Hydra Music'));
       return;
     }
-    showAppMessage('Подключаюсь к устройству...');
+    showAppMessage(tr('Подключаюсь к устройству...'));
     await pairWith(link);
   }
 
@@ -457,7 +463,7 @@ class NetService extends ChangeNotifier {
       started = true;
       error = '';
     } on CoreException catch (e) {
-      error = 'Сеть не запустилась: ${e.message}';
+      error = tr('Сеть не запустилась: {message}', {'message': e.message});
       notifyListeners();
       return;
     }
@@ -581,7 +587,7 @@ class NetService extends ChangeNotifier {
   Future<void> pairWith(PairLink link) async {
     _quietRun = false;
     await start();
-    await _keepAwake(true, 'Сопряжение');
+    await _keepAwake(true, tr('Сопряжение'));
     try {
       await Core.call('net_pair_connect', {
         'addrs': [for (final a in link.addrs) '$a:${link.port}'],
@@ -605,7 +611,7 @@ class NetService extends ChangeNotifier {
     _quietRun = quiet;
     // сначала подхватываем изменения в папке (файлы, удалённые в проводнике)
     await hydraLibrary.refresh();
-    await _keepAwake(true, 'Синхронизация с «${d.name}»');
+    await _keepAwake(true, tr('Синхронизация с «{name}»', {'name': d.name}));
     try {
       await Core.call('net_sync', {'device_id': d.id, 'internet': await _internetAllowed()});
       error = '';
@@ -632,7 +638,7 @@ class NetService extends ChangeNotifier {
   /// Новое имя этого устройства. Другие устройства увидят его при следующей синхронизации.
   /// Возвращает текст ошибки или null.
   Future<String?> setDeviceName(String name) async {
-    if (!started) return 'сеть ещё не запущена';
+    if (!started) return tr('сеть ещё не запущена');
     try {
       final r = await Core.call('net_set_name', {'name': name}) as Map<String, dynamic>;
       deviceName = (r['name'] as String?) ?? deviceName;

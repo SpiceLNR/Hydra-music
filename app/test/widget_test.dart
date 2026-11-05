@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydra_music/desktop/context_menu.dart';
 import 'package:hydra_music/desktop/v_slider.dart';
+import 'package:hydra_music/l10n/l10n.dart';
 import 'package:hydra_music/main.dart';
 import 'package:hydra_music/widgets/metro_widgets.dart';
 import 'package:hydra_music/widgets/now_playing_bar.dart';
 
 void main() {
+  // тесты проверяют русские подписи: язык задаётся явно, а не по системе
+  setUp(() => L10n.instance.lang = AppLang.ru);
+
   testWidgets('home screen shows the four main tiles', (tester) async {
     // размер экрана типичного телефона (360x800 логических пикселей)
     tester.view.physicalSize = const Size(1080, 2400);

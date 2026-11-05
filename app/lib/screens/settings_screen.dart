@@ -14,6 +14,7 @@ import '../net_service.dart';
 import '../theme.dart';
 import '../updater.dart';
 import '../widgets/metro_widgets.dart';
+import '../l10n/l10n.dart';
 
 /// Настройки. Панели «Сейчас играет» здесь нет намеренно.
 class SettingsScreen extends StatefulWidget {
@@ -41,9 +42,9 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     final old = hydraLibrary.rootPath ?? '';
     final String? picked;
     try {
-      picked = await FilePicker.getDirectoryPath(dialogTitle: 'Новая папка библиотеки');
+      picked = await FilePicker.getDirectoryPath(dialogTitle: tr('Новая папка библиотеки'));
     } catch (e) {
-      _toast('Не удалось открыть выбор папки: $e');
+      _toast(tr('Не удалось открыть выбор папки: {e}', {'e': e}));
       return;
     }
     if (picked == null || !mounted) return;
@@ -61,20 +62,14 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     final choice = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Папка библиотеки'),
+        title: Text(tr('Папка библиотеки')),
         content: Text(
-          'Выбрано: $picked\n\n'
-          '«Перенести»: все плейлисты и корзина переедут\nиз: $old\nв: $target\n'
-          'Если папки на разных дисках, это может занять много времени. '
-          'Если что-то пойдёт не так, всё вернётся на место.\n\n'
-          '«Использовать эту»: ничего не переносится, приложение начнёт работать с выбранной '
-          'папкой как с библиотекой (например, после переустановки, когда музыка уже лежит там).\n\n'
-          'Музыка остановится, идущая синхронизация прервётся.',
+          tr('Выбрано: {picked}\n\n«Перенести»: все плейлисты и корзина переедут\nиз: {old}\nв: {target}\nЕсли папки на разных дисках, это может занять много времени. Если что-то пойдёт не так, всё вернётся на место.\n\n«Использовать эту»: ничего не переносится, приложение начнёт работать с выбранной папкой как с библиотекой (например, после переустановки, когда музыка уже лежит там).\n\nМузыка остановится, идущая синхронизация прервётся.', {'picked': picked, 'old': old, 'target': target}),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
-          TextButton(onPressed: () => Navigator.pop(ctx, 'use'), child: const Text('Использовать эту')),
-          TextButton(onPressed: () => Navigator.pop(ctx, 'move'), child: const Text('Перенести')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'use'), child: Text(tr('Использовать эту'))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'move'), child: Text(tr('Перенести'))),
         ],
       ),
     );
@@ -84,10 +79,10 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
         await hydraLibrary.useFolder(picked);
         if (mounted) {
           setState(() {});
-          _toast('Теперь библиотека: $picked');
+          _toast(tr('Теперь библиотека: {picked}', {'picked': picked}));
         }
       } catch (e) {
-        if (mounted) _toast('Не удалось открыть папку: $e');
+        if (mounted) _toast(tr('Не удалось открыть папку: {e}', {'e': e}));
       }
       return;
     }
@@ -95,14 +90,14 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const PopScope(
+      builder: (_) => PopScope(
         canPop: false,
         child: AlertDialog(
           content: Row(
             children: [
               CircularProgressIndicator(),
               SizedBox(width: 20),
-              Expanded(child: Text('Переношу файлы…')),
+              Expanded(child: Text(tr('Переношу файлы…'))),
             ],
           ),
         ),
@@ -112,12 +107,11 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     try {
       final r = await hydraLibrary.moveTo(target);
       final left = (r['leftover'] as List?)?.length ?? 0;
-      message = 'Библиотека перенесена: файлов ${r['files']}'
-          '${left > 0 ? '. Не удалось убрать старые файлы: $left (папка занята)' : ''}';
+      message = tr('Библиотека перенесена: файлов {a1}{a2}', {'a1': r['files'], 'a2': left > 0 ? tr('. Не удалось убрать старые файлы: {left} (папка занята)', {'left': left}) : ''});
     } on CoreException catch (e) {
-      message = 'Перенос не выполнен, всё осталось на месте: ${e.message}';
+      message = tr('Перенос не выполнен, всё осталось на месте: {message}', {'message': e.message});
     } catch (e) {
-      message = 'Перенос не выполнен: $e';
+      message = tr('Перенос не выполнен: {e}', {'e': e});
     }
     nav.pop();
     if (mounted) {
@@ -145,8 +139,8 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
   /// Что не так со связью через интернет (null - всё в порядке или она выключена).
   String? _internetProblem() {
     if (!hydraNet.internetOn) return null;
-    if (hydraNet.internetError.isNotEmpty) return 'Не запустилось: ${hydraNet.internetError}';
-    if (hydraNet.endpoint.isEmpty) return 'Заработает после перезапуска приложения.';
+    if (hydraNet.internetError.isNotEmpty) return tr('Не запустилось: {internetError}', {'internetError': hydraNet.internetError});
+    if (hydraNet.endpoint.isEmpty) return tr('Заработает после перезапуска приложения.');
     return null;
   }
 
@@ -156,7 +150,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     final value = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Relay-сервер'),
+        title: Text(tr('Relay-сервер')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -169,19 +163,18 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
               onSubmitted: (v) => Navigator.pop(ctx, v),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Через него устройства связываются, когда напрямую не получается. '
-              'Пустое поле - общедоступные серверы n0. Музыка идёт зашифрованной.',
+            Text(
+              tr('Через него устройства связываются, когда напрямую не получается. Пустое поле - общедоступные серверы n0. Музыка идёт зашифрованной.'),
               style: TextStyle(fontSize: 13, color: Metro.textDim),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
-          TextButton(onPressed: () => Navigator.pop(ctx, ''), child: const Text('По умолчанию')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
+          TextButton(onPressed: () => Navigator.pop(ctx, ''), child: Text(tr('По умолчанию'))),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Сохранить'),
+            child: Text(tr('Сохранить')),
           ),
         ],
       ),
@@ -191,8 +184,8 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     final err = await hydraNet.setRelay(value);
     if (!mounted) return;
     _toast(err == null
-        ? (value.trim().isEmpty ? 'Relay: серверы по умолчанию' : 'Relay-сервер сохранён')
-        : 'Relay не изменён: $err');
+        ? (value.trim().isEmpty ? tr('Relay: серверы по умолчанию') : tr('Relay-сервер сохранён'))
+        : tr('Relay не изменён: {err}', {'err': err}));
   }
 
   Future<void> _readBattery() async {
@@ -201,13 +194,46 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     if (mounted) setState(() => _batteryFree = v);
   }
 
+  /// Название варианта языка: сами языки - на своём языке, чтобы их узнавали.
+  static String _langLabel(String choice) => switch (choice) {
+        'ru' => 'Русский',
+        'en' => 'English',
+        'uk' => 'Українська',
+        _ => tr('Как в системе'),
+      };
+
+  /// Язык интерфейса: как в системе или один из трёх. Смена сразу перерисовывает приложение.
+  Future<void> _pickLanguage() async {
+    final current = L10n.instance.choice;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(tr('Язык')),
+        children: [
+          for (final c in const ['system', 'ru', 'en', 'uk'])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, c),
+              child: Row(
+                children: [
+                  Icon(c == current ? Icons.check : null, color: Metro.green),
+                  const SizedBox(width: 12),
+                  Text(_langLabel(c), style: const TextStyle(fontSize: 18)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (picked != null) await L10n.instance.setChoice(picked);
+  }
+
   /// Своё имя: так это устройство видят остальные (в «Устройствах» и журнале).
   Future<void> _editName() async {
     final controller = TextEditingController(text: hydraNet.deviceName);
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Имя этого устройства'),
+        title: Text(tr('Имя этого устройства')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -216,20 +242,20 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
               controller: controller,
               autofocus: true,
               maxLength: 40,
-              decoration: const InputDecoration(hintText: 'Например, «Телефон Даши»'),
+              decoration: InputDecoration(hintText: tr('Например, «Телефон Даши»')),
               onSubmitted: (v) => Navigator.pop(ctx, v),
             ),
-            const Text(
-              'Так это устройство увидят остальные. Они узнают новое имя при следующей синхронизации.',
+            Text(
+              tr('Так это устройство увидят остальные. Они узнают новое имя при следующей синхронизации.'),
               style: TextStyle(fontSize: 13, color: Metro.textDim),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Сохранить'),
+            child: Text(tr('Сохранить')),
           ),
         ],
       ),
@@ -239,14 +265,14 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     final err = await hydraNet.setDeviceName(name);
     if (!mounted) return;
     if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Имя не сохранено: $err')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Имя не сохранено: {err}', {'err': err}))));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('настройки')),
+      appBar: AppBar(title: Text(tr('настройки'))),
       body: ListenableBuilder(
         listenable: hydraNet,
         builder: (context, _) {
@@ -254,27 +280,32 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
           return ListView(
             padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
             children: [
-              const _Section('Это устройство'),
+              _Section(tr('Это устройство')),
               _ValueRow(
-                title: 'Имя',
+                title: tr('Имя'),
                 value: hydraNet.deviceName.isEmpty ? '…' : hydraNet.deviceName,
                 onTap: _editName,
               ),
+              _ValueRow(
+                title: tr('Язык'),
+                value: _langLabel(L10n.instance.choice),
+                onTap: _pickLanguage,
+              ),
 
-              const _Section('Синхронизация'),
+              _Section(tr('Синхронизация')),
               MetroSwitchRow(
-                title: 'Автоматически',
+                title: tr('Автоматически'),
                 value: hydraNet.autoSync,
                 onChanged: hydraNet.setAutoSync,
               ),
               if (Platform.isAndroid)
                 MetroSwitchRow(
-                  title: 'Только во время зарядки',
+                  title: tr('Только во время зарядки'),
                   value: hydraNet.autoOnlyCharging,
                   onChanged: hydraNet.autoSync ? hydraNet.setAutoOnlyCharging : (_) {},
                 ),
               MetroSwitchRow(
-                title: 'Через интернет',
+                title: tr('Через интернет'),
                 value: hydraNet.internetOn,
                 onChanged: hydraNet.setInternetOn,
               ),
@@ -282,13 +313,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                 _Note(problem, error: hydraNet.internetError.isNotEmpty),
               if (Platform.isAndroid)
                 MetroSwitchRow(
-                  title: 'Через интернет только по Wi-Fi',
+                  title: tr('Через интернет только по Wi-Fi'),
                   value: hydraNet.internetWifiOnly,
                   onChanged: hydraNet.internetOn ? hydraNet.setInternetWifiOnly : (_) {},
                 ),
               _ValueRow(
-                title: 'Relay-сервер',
-                value: hydraNet.relay.isEmpty ? 'по умолчанию' : hydraNet.relay,
+                title: tr('Relay-сервер'),
+                value: hydraNet.relay.isEmpty ? tr('по умолчанию') : hydraNet.relay,
                 onTap: _editRelay,
               ),
               if (Platform.isAndroid && _batteryFree != true)
@@ -296,19 +327,19 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                   child: OutlinedButton(
                     onPressed: hydraNet.requestBatteryExempt,
-                    child: const Text('Разрешить работу в фоне'),
+                    child: Text(tr('Разрешить работу в фоне')),
                   ),
                 ),
 
-              const _Section('Библиотека'),
+              _Section(tr('Библиотека')),
               _ValueRow(
-                title: 'Папка',
+                title: tr('Папка'),
                 value: hydraLibrary.rootPath ?? '…',
                 onTap: _changeRoot,
               ),
 
               if (Platform.isWindows) ...[
-                const _Section('Окно'),
+                _Section(tr('Окно')),
                 ListenableBuilder(
                   listenable: DesktopSettings.instance,
                   builder: (context, _) {
@@ -325,10 +356,10 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                           padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
                           child: Row(
                             children: [
-                              const Expanded(
-                                  child: Text('Сторона', style: TextStyle(fontSize: 18))),
+                              Expanded(
+                                  child: Text(tr('Сторона'), style: TextStyle(fontSize: 18))),
                               _Segmented(
-                                labels: const ['Слева', 'Справа'],
+                                labels: [tr('Слева'), tr('Справа')],
                                 selected: s.dockRight ? 1 : 0,
                                 onSelect: (i) => choose(i == 1),
                               ),
@@ -336,7 +367,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                           ),
                         ),
                         MetroSwitchRow(
-                          title: 'Сворачивать при клике мимо',
+                          title: tr('Сворачивать при клике мимо'),
                           value: s.autoCollapse,
                           onChanged: s.setAutoCollapse,
                         ),
@@ -347,13 +378,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                 const _AutostartRow(),
               ],
 
-              const _Section('Обновления'),
+              _Section(tr('Обновления')),
               const _UpdateTile(),
               // ядро показываем, только если оно не запустилось: тогда тут причина
               FutureBuilder<dynamic>(
                 future: _core,
                 builder: (context, snap) => snap.hasError
-                    ? _Note('Ядро не запустилось: ${snap.error}', error: true)
+                    ? _Note(tr('Ядро не запустилось: {error}', {'error': snap.error}), error: true)
                     : const SizedBox.shrink(),
               ),
 
@@ -511,15 +542,15 @@ class _UpdateTileState extends State<_UpdateTile> {
     final u = UpdateService.instance;
     final r = await u.check();
     if (!mounted) return;
-    final where = Platform.isWindows ? 'внизу шторки' : 'на главном экране под плитками';
+    final where = Platform.isWindows ? tr('внизу шторки') : tr('на главном экране под плитками');
     setState(() {
       _checking = false;
       _result = switch (r) {
-        CheckResult.newer => 'Доступна версия ${u.info?.version ?? '?'}: плашка $where.',
-        CheckResult.upToDate => 'Установлена последняя версия.',
-        CheckResult.failed => 'Не удалось связаться с GitHub. Проверьте интернет.',
-        CheckResult.busy => 'Обновление ${u.info?.version ?? ''} уже скачивается или готово: плашка $where.',
-        CheckResult.skipped => 'Обновления проверяются только у сборок из GitHub.',
+        CheckResult.newer => tr('Доступна версия {a1}: плашка {where}.', {'a1': u.info?.version ?? '?', 'where': where}),
+        CheckResult.upToDate => tr('Установлена последняя версия.'),
+        CheckResult.failed => tr('Не удалось связаться с GitHub. Проверьте интернет.'),
+        CheckResult.busy => tr('Обновление {a1} уже скачивается или готово: плашка {where}.', {'a1': u.info?.version ?? '', 'where': where}),
+        CheckResult.skipped => tr('Обновления проверяются только у сборок из GitHub.'),
       };
     });
   }
@@ -533,20 +564,20 @@ class _UpdateTileState extends State<_UpdateTile> {
         final last = u.lastChecked;
         final String text;
         if (!u.supported) {
-          text = 'сборка $kBuild · локальная, обновления не проверяются';
+          text = tr('сборка {kBuild} · локальная, обновления не проверяются', {'kBuild': kBuild});
         } else if (_checking) {
-          text = 'Проверяю…';
+          text = tr('Проверяю…');
         } else if (_result != null) {
           text = _result!;
         } else {
-          text = last == null ? 'сборка $kBuild' : 'сборка $kBuild · проверено в ${_time(last)}';
+          text = last == null ? tr('сборка {kBuild}', {'kBuild': kBuild}) : tr('сборка {kBuild} · проверено в {a1}', {'kBuild': kBuild, 'a1': _time(last)});
         }
         return ListTile(
-          title: Text('Версия $kVersion', style: const TextStyle(fontSize: 18)),
+          title: Text(tr('Версия {kVersion}', {'kVersion': kVersion}), style: const TextStyle(fontSize: 18)),
           subtitle: Text(text, style: const TextStyle(fontSize: 13, color: Metro.textDim)),
           trailing: OutlinedButton(
             onPressed: u.supported && !_checking ? _check : null,
-            child: const Text('Проверить'),
+            child: Text(tr('Проверить')),
           ),
         );
       },
@@ -597,11 +628,11 @@ class _AutostartRowState extends State<_AutostartRow> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         MetroSwitchRow(
-          title: 'Запускать вместе с Windows',
+          title: tr('Запускать вместе с Windows'),
           value: _on ?? false,
           onChanged: (v) => _set(v),
         ),
-        if (_error != null) _Note('Не получилось: $_error', error: true),
+        if (_error != null) _Note(tr('Не получилось: {_error}', {'_error': _error}), error: true),
       ],
     );
   }

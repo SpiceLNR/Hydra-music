@@ -11,6 +11,7 @@ import 'audio_handler.dart';
 import 'file_probe.dart';
 import 'library_controller.dart';
 import 'models.dart';
+import 'l10n/l10n.dart';
 
 /// Режим порядка воспроизведения (слева направо в переключателе).
 /// [repeat] - один трек по кругу; [standard] - плейлист по кругу;
@@ -114,11 +115,11 @@ class PlayerService extends ChangeNotifier implements PlayerControls {
   void _onError(String message) {
     final t = current;
     final name = t == null ? '' : '«${t.title}» (${t.fileName}): ';
-    showAppMessage('Не удалось воспроизвести $name$message');
+    showAppMessage(tr('Не удалось воспроизвести {name}{message}', {'name': name, 'message': message}));
     if (t != null) {
       // дополняем сообщение справкой о файле (есть ли он, размер, начало)
       probeFile(t.path).then((info) {
-        showAppMessage('Не удалось воспроизвести $name$message\n$info');
+        showAppMessage(tr('Не удалось воспроизвести {name}{message}\n{info}', {'name': name, 'message': message, 'info': info}));
       });
     }
     _errorStreak++;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../net_service.dart';
 import '../theme.dart';
+import '../l10n/l10n.dart';
 
 /// Журнал сети: когда и что происходило при сопряжении и синхронизации.
 class JournalScreen extends StatelessWidget {
@@ -24,15 +25,15 @@ class JournalScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('журнал')),
+      appBar: AppBar(title: Text(tr('журнал'))),
       body: ListenableBuilder(
         listenable: hydraNet,
         builder: (context, _) {
           final lines = hydraNet.log.reversed.map(_line).toList();
           if (lines.isEmpty) {
-            return const Padding(
+            return Padding(
               padding: EdgeInsets.all(16),
-              child: Text('Журнал пока пуст.'),
+              child: Text(tr('Журнал пока пуст.')),
             );
           }
           return ListView(

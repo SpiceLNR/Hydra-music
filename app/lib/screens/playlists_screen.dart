@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
 import 'playlist_screen.dart';
+import '../l10n/l10n.dart';
 
 /// Список плейлистов.
 ///
@@ -49,17 +50,17 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Новый плейлист'),
+        title: Text(tr('Новый плейлист')),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: Metro.inputDecoration(hint: 'Название папки'),
+          decoration: Metro.inputDecoration(hint: tr('Название папки')),
         ),
         actions: [
-          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
           ElevatedButton(
               onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('Создать')),
+              child: Text(tr('Создать'))),
         ],
       ),
     );
@@ -76,17 +77,17 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Переименовать плейлист'),
+        title: Text(tr('Переименовать плейлист')),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: Metro.inputDecoration(hint: 'Название папки'),
+          decoration: Metro.inputDecoration(hint: tr('Название папки')),
         ),
         actions: [
-          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
           ElevatedButton(
               onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('Сохранить')),
+              child: Text(tr('Сохранить'))),
         ],
       ),
     );
@@ -129,7 +130,7 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
         Text(p.name,
             style: const TextStyle(
                 fontSize: 22, fontWeight: FontWeight.w400, color: Colors.white)),
-        Text('${p.trackCount} треков', style: const TextStyle(color: Colors.white)),
+        Text(plural(p.trackCount, 'трек', 'трека', 'треков'), style: const TextStyle(color: Colors.white)),
       ],
     );
   }
@@ -166,12 +167,11 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
   Widget _editList() {
     return Column(
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Text('Тяните за тёмную область справа, чтобы изменить порядок. '
-                'Карандаш переименовывает плейлист.'),
+            child: Text(tr('Тяните за тёмную область справа, чтобы изменить порядок. Карандаш переименовывает плейлист.')),
           ),
         ),
         Expanded(
@@ -200,7 +200,7 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Переименовать',
+                      tooltip: tr('Переименовать'),
                       icon: const Icon(Icons.edit_outlined, color: Colors.white),
                       onPressed: () => _rename(p),
                     ),
@@ -232,11 +232,11 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_editing ? 'редактирование' : 'плейлисты'),
+          title: Text(_editing ? tr('редактирование') : tr('плейлисты')),
           actions: [
             if (!_editing)
               IconButton(
-                tooltip: 'Обновить',
+                tooltip: tr('Обновить'),
                 icon: const Icon(Icons.refresh),
                 onPressed: hydraLibrary.refresh,
               ),
@@ -251,12 +251,11 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
                 if (hydraLibrary.scanning) const MetroProgress(),
                 Expanded(
                   child: playlists.isEmpty
-                      ? const Center(
+                      ? Center(
                           child: Padding(
                             padding: EdgeInsets.all(24),
                             child: Text(
-                              'Плейлистов пока нет.\nСоздайте плейлист кнопкой ниже или положите '
-                              'папку с музыкой в Music/Hydra.',
+                              tr('Плейлистов пока нет.\nСоздайте плейлист кнопкой ниже или положите папку с музыкой в Music/Hydra.'),
                               textAlign: TextAlign.center,
                             ),
                           ),
@@ -280,12 +279,12 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
                       ? ElevatedButton.icon(
                           onPressed: _stopEditing,
                           icon: const Icon(Icons.check),
-                          label: const Text('Готово'),
+                          label: Text(tr('Готово')),
                         )
                       : ElevatedButton.icon(
                           onPressed: _create,
                           icon: const Icon(Icons.add),
-                          label: const Text('Новый плейлист'),
+                          label: Text(tr('Новый плейлист')),
                         ),
                 ),
               ),

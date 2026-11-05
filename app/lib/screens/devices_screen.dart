@@ -9,6 +9,7 @@ import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
 import 'journal_screen.dart';
 import 'pair_screens.dart';
+import '../l10n/l10n.dart';
 
 class DevicesScreen extends StatefulWidget {
   const DevicesScreen({super.key});
@@ -33,12 +34,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Future<void> _revoke(DeviceInfo d) async {
     final ok = await confirmAction(
       context,
-      title: 'Удалить устройство?',
-      message: '«${d.name}» исчезнет из списка, и устройства перестанут синхронизироваться. '
-          'Музыка на обоих устройствах останется на месте. '
-          'Это устройство тоже уберёт вас из своего списка: сразу, если оно в сети, '
-          'иначе когда появится (до 14 дней).',
-      confirmLabel: 'Удалить',
+      title: tr('Удалить устройство?'),
+      message: tr('«{name}» исчезнет из списка, и устройства перестанут синхронизироваться. Музыка на обоих устройствах останется на месте. Это устройство тоже уберёт вас из своего списка: сразу, если оно в сети, иначе когда появится (до 14 дней).', {'name': d.name}),
+      confirmLabel: tr('Удалить'),
       danger: true,
     );
     if (ok) await hydraNet.forget(d);
@@ -49,7 +47,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Название устройства'),
+        title: Text(tr('Название устройства')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -58,22 +56,21 @@ class _DevicesScreenState extends State<DevicesScreen> {
               controller: controller,
               autofocus: true,
               maxLength: 40,
-              decoration: const InputDecoration(hintText: 'Например, «Ноутбук»'),
+              decoration: InputDecoration(hintText: tr('Например, «Ноутбук»')),
               onSubmitted: (v) => Navigator.pop(ctx, v),
             ),
             if (d.originalName.isNotEmpty)
               Text(
-                'Само устройство называет себя «${d.originalName}». '
-                'Новое имя видно только здесь; пустое поле вернёт исходное.',
+                tr('Само устройство называет себя «{originalName}». Новое имя видно только здесь; пустое поле вернёт исходное.', {'originalName': d.originalName}),
                 style: const TextStyle(fontSize: 13, color: Metro.textDim),
               ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Сохранить'),
+            child: Text(tr('Сохранить')),
           ),
         ],
       ),
@@ -87,28 +84,28 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final choice = await showDialog<String>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('Добавить устройство'),
+        title: Text(tr('Добавить устройство')),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.pop(ctx, 'show'),
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('Показать QR-код на этом устройстве'),
+              child: Text(tr('Показать QR-код на этом устройстве')),
             ),
           ),
           if (isMobile)
             SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, 'scan'),
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text('Сканировать QR-код другого устройства'),
+                child: Text(tr('Сканировать QR-код другого устройства')),
               ),
             ),
           SimpleDialogOption(
             onPressed: () => Navigator.pop(ctx, 'paste'),
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('Ввести ссылку сопряжения'),
+              child: Text(tr('Ввести ссылку сопряжения')),
             ),
           ),
         ],
@@ -131,14 +128,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
       appBar: AppBar(
         actions: [
           IconButton(
-          tooltip: 'Журнал',
+          tooltip: tr('Журнал'),
           icon: const Icon(Icons.receipt_long),
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const JournalScreen()),
           ),
           ),
         ],
-        title: const Text('устройства'),
+        title: Text(tr('устройства')),
       ),
       body: ListenableBuilder(
         listenable: hydraNet,
@@ -150,11 +147,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
               _StatusCard(net: hydraNet),
               const SizedBox(height: 8),
               if (devices.isEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(
-                    'Пока нет ни одного устройства. Оба устройства должны быть в одной Wi-Fi сети. '
-                    'Нажмите «Добавить устройство»: на одном покажите QR-код, на другом отсканируйте его.',
+                    tr('Пока нет ни одного устройства. Оба устройства должны быть в одной Wi-Fi сети. Нажмите «Добавить устройство»: на одном покажите QR-код, на другом отсканируйте его.'),
                   ),
                 ),
               for (final d in devices) ...[
@@ -183,7 +179,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 child: ElevatedButton.icon(
                   onPressed: _add,
                   icon: const Icon(Icons.qr_code),
-                  label: const Text('Добавить устройство'),
+                  label: Text(tr('Добавить устройство')),
                 ),
               ),
             ),
@@ -202,9 +198,9 @@ class _StatusCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final lines = <Widget>[];
     if (!net.started) {
-      lines.add(const Text('Сеть запускается...'));
+      lines.add(Text(tr('Сеть запускается...')));
     } else if (net.busy) {
-      lines.add(Text(net.message.isEmpty ? 'Идёт синхронизация...' : net.message));
+      lines.add(Text(net.message.isEmpty ? tr('Идёт синхронизация...') : net.message));
       lines.add(const SizedBox(height: 8));
       lines.add(const LinearProgressIndicator(color: Metro.green));
     } else if (net.message.isNotEmpty) {
@@ -255,7 +251,7 @@ class _DeviceCard extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(child: Text(d.name, style: const TextStyle(fontSize: 20))),
               IconButton(
-                tooltip: 'Переименовать',
+                tooltip: tr('Переименовать'),
                 icon: const Icon(Icons.edit, size: 20),
                 onPressed: onRename,
               ),
@@ -263,7 +259,7 @@ class _DeviceCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '${d.online ? 'в сети' : 'не в сети'} · синхронизация: ${d.lastSyncLabel}',
+            tr('{a1} · синхронизация: {lastSyncLabel}', {'a1': d.online ? tr('в сети') : tr('не в сети'), 'lastSyncLabel': d.lastSyncLabel}),
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -272,11 +268,11 @@ class _DeviceCard extends StatelessWidget {
               Expanded(
                 child: ElevatedButton(
                   onPressed: busy ? null : onSync,
-                  child: const Text('Синхронизировать'),
+                  child: Text(tr('Синхронизировать')),
                 ),
               ),
               const SizedBox(width: 8),
-              OutlinedButton(onPressed: onRevoke, child: const Text('Удалить')),
+              OutlinedButton(onPressed: onRevoke, child: Text(tr('Удалить'))),
             ],
           ),
         ],

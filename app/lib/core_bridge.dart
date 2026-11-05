@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'l10n/l10n.dart';
 
 /// Ошибка, пришедшая из Rust-ядра (или при загрузке библиотеки).
 class CoreException implements Exception {
@@ -21,7 +22,7 @@ typedef _FreeDart = void Function(Pointer<Utf8>);
 DynamicLibrary _openLibrary() {
   if (Platform.isAndroid) return DynamicLibrary.open('libhydra_ffi.so');
   if (Platform.isWindows) return DynamicLibrary.open('hydra_ffi.dll');
-  throw UnsupportedError('Платформа не поддерживается: ${Platform.operatingSystem}');
+  throw UnsupportedError(tr('Платформа не поддерживается: {operatingSystem}', {'operatingSystem': Platform.operatingSystem}));
 }
 
 /// Один синхронный вызов ядра. Выполняется в отдельном изоляте (см. [Core.call]).
@@ -52,10 +53,10 @@ class Core {
     try {
       response = await Isolate.run(() => _callSync(request));
     } catch (e) {
-      throw CoreException('Не удалось загрузить ядро: $e');
+      throw CoreException(tr('Не удалось загрузить ядро: {e}', {'e': e}));
     }
     final json = jsonDecode(response) as Map<String, dynamic>;
     if (json['ok'] == true) return json['result'];
-    throw CoreException((json['error'] as String?) ?? 'неизвестная ошибка ядра');
+    throw CoreException((json['error'] as String?) ?? tr('неизвестная ошибка ядра'));
   }
 }

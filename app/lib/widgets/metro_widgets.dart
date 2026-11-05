@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../l10n/l10n.dart';
 
 /// Плоская плитка-кнопка в стиле Metro.
 class MetroTile extends StatelessWidget {
@@ -59,7 +60,7 @@ Future<bool> confirmAction(
   BuildContext context, {
   required String title,
   required String message,
-  String confirmLabel = 'Да',
+  String? confirmLabel,
   bool danger = false,
 }) async {
   final result = await showDialog<bool>(
@@ -68,11 +69,11 @@ Future<bool> confirmAction(
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w300, fontSize: 24)),
       content: Text(message),
       actions: [
-        OutlinedButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+        OutlinedButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Отмена'))),
         ElevatedButton(
           style: danger ? ElevatedButton.styleFrom(backgroundColor: Metro.danger) : null,
           onPressed: () => Navigator.pop(ctx, true),
-          child: Text(confirmLabel),
+          child: Text(confirmLabel ?? tr('Да')),
         ),
       ],
     ),
@@ -164,7 +165,7 @@ class MetroSwitchRow extends StatelessWidget {
         child: Row(
           children: [
             Expanded(child: Text(title, style: const TextStyle(fontSize: 18))),
-            Text(value ? 'Вкл' : 'Выкл',
+            Text(value ? tr('Вкл') : tr('Выкл'),
                 style: const TextStyle(fontSize: 16, color: Metro.textDim)),
             const SizedBox(width: 12),
             MetroToggle(value: value, onChanged: onChanged),

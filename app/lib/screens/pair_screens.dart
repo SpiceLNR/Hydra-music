@@ -12,6 +12,7 @@ import '../app_messenger.dart';
 import '../core_bridge.dart';
 import '../net_service.dart';
 import '../theme.dart';
+import '../l10n/l10n.dart';
 
 /// Показывает QR-код сопряжения. Закрывается сам, когда второе устройство подключилось.
 class PairOfferScreen extends StatefulWidget {
@@ -57,7 +58,7 @@ class _PairOfferScreenState extends State<PairOfferScreen> {
       setState(() {
         _link = link;
         _left = 180;
-        _error = link.addrs.isEmpty ? 'Нет подключения к локальной сети (Wi-Fi).' : null;
+        _error = link.addrs.isEmpty ? tr('Нет подключения к локальной сети (Wi-Fi).') : null;
       });
     } on CoreException catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -68,7 +69,7 @@ class _PairOfferScreenState extends State<PairOfferScreen> {
     if (hydraNet.familyGeneration != _familyAtStart && mounted) {
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Устройство добавлено')),
+        SnackBar(content: Text(tr('Устройство добавлено'))),
       );
     }
   }
@@ -77,7 +78,7 @@ class _PairOfferScreenState extends State<PairOfferScreen> {
   Widget build(BuildContext context) {
     final link = _link;
     return Scaffold(
-      appBar: AppBar(title: const Text('QR-код')),
+      appBar: AppBar(title: Text(tr('QR-код'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -97,24 +98,23 @@ class _PairOfferScreenState extends State<PairOfferScreen> {
             const SizedBox(height: 16),
             Text(
               _left > 0
-                  ? 'Код действует ещё ${_left ~/ 60}:${(_left % 60).toString().padLeft(2, '0')}. '
-                      'На втором устройстве откройте «Устройства» -> «Добавить устройство» -> «Сканировать».'
-                  : 'Код устарел.',
+                  ? tr('Код действует ещё {a1}:{a2}. На втором устройстве откройте «Устройства» -> «Добавить устройство» -> «Сканировать».', {'a1': _left ~/ 60, 'a2': (_left % 60).toString().padLeft(2, '0')})
+                  : tr('Код устарел.'),
             ),
             const SizedBox(height: 8),
-            const Text('Оба устройства должны быть в одной Wi-Fi сети.'),
+            Text(tr('Оба устройства должны быть в одной Wi-Fi сети.')),
             const SizedBox(height: 16),
             if (_left == 0)
-              ElevatedButton(onPressed: _create, child: const Text('Показать новый код')),
+              ElevatedButton(onPressed: _create, child: Text(tr('Показать новый код'))),
             OutlinedButton(
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: link.toUri()));
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Ссылка скопирована')),
+                  SnackBar(content: Text(tr('Ссылка скопирована'))),
                 );
               },
-              child: const Text('Скопировать ссылку (для ввода вручную)'),
+              child: Text(tr('Скопировать ссылку (для ввода вручную)')),
             ),
           ] else if (_error == null)
             const Center(child: CircularProgressIndicator(color: Metro.green)),
@@ -139,7 +139,7 @@ class _PairScanScreenState extends State<PairScanScreen> {
   bool _busy = false; // кадр сейчас разбирается: остальные пропускаем
   int _frames = 0;
   String _status = '';
-  String _hint = 'Наведите камеру на QR-код на втором устройстве';
+  String _hint = tr('Наведите камеру на QR-код на втором устройстве');
 
   @override
   void initState() {
@@ -151,7 +151,7 @@ class _PairScanScreenState extends State<PairScanScreen> {
     try {
       final cams = await availableCameras();
       if (cams.isEmpty) {
-        if (mounted) setState(() => _error = 'Камера не найдена');
+        if (mounted) setState(() => _error = tr('Камера не найдена'));
         return;
       }
       final cam = cams.firstWhere(
@@ -212,11 +212,11 @@ class _PairScanScreenState extends State<PairScanScreen> {
         final text = await compute(_decodeQr, frame);
         _frames++;
         if (mounted && _frames % 5 == 0 && !_handled) {
-          setState(() => _status = 'кадров проверено: $_frames');
+          setState(() => _status = tr('кадров проверено: {_frames}', {'_frames': _frames}));
         }
         if (text != null) await _onText(text);
       } on Object catch (e) {
-        if (mounted && !_handled) setState(() => _status = 'ошибка разбора: $e');
+        if (mounted && !_handled) setState(() => _status = tr('ошибка разбора: {e}', {'e': e}));
       } finally {
         _busy = false;
       }
@@ -227,21 +227,21 @@ class _PairScanScreenState extends State<PairScanScreen> {
     if (_handled || !mounted) return;
     final link = PairLink.parse(raw);
     if (link == null) {
-      setState(() => _hint = 'QR прочитан, но это не код сопряжения Hydra Music');
+      setState(() => _hint = tr('QR прочитан, но это не код сопряжения Hydra Music'));
       return;
     }
     _handled = true;
     await hydraNet.pairWith(link);
     if (!mounted) return;
     Navigator.of(context).pop();
-    showAppMessage('Подключаюсь к устройству...');
+    showAppMessage(tr('Подключаюсь к устройству...'));
   }
 
   @override
   Widget build(BuildContext context) {
     final camera = _camera;
     return Scaffold(
-      appBar: AppBar(title: const Text('сканировать QR')),
+      appBar: AppBar(title: Text(tr('сканировать QR'))),
       body: Column(
         children: [
           Expanded(
@@ -250,7 +250,7 @@ class _PairScanScreenState extends State<PairScanScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        'Камера недоступна: $_error',
+                        tr('Камера недоступна: {_error}', {'_error': _error}),
                         style: const TextStyle(color: Metro.danger),
                       ),
                     ),
@@ -276,7 +276,7 @@ class _PairScanScreenState extends State<PairScanScreen> {
                     final started = await showPasteDialog(context);
                     if (started && context.mounted) Navigator.of(context).pop();
                   },
-                  child: const Text('Ввести ссылку вручную'),
+                  child: Text(tr('Ввести ссылку вручную')),
                 ),
               ],
             ),
@@ -327,7 +327,7 @@ Future<bool> showPasteDialog(BuildContext context) async {
   final text = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Ссылка сопряжения'),
+      title: Text(tr('Ссылка сопряжения')),
       content: TextField(
         controller: controller,
         autofocus: true,
@@ -336,10 +336,10 @@ Future<bool> showPasteDialog(BuildContext context) async {
         maxLines: 4,
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Отмена'))),
         ElevatedButton(
           onPressed: () => Navigator.pop(ctx, controller.text),
-          child: const Text('Подключиться'),
+          child: Text(tr('Подключиться')),
         ),
       ],
     ),
@@ -349,7 +349,7 @@ Future<bool> showPasteDialog(BuildContext context) async {
   final link = PairLink.parse(text);
   if (link == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Это не похоже на ссылку сопряжения')),
+      SnackBar(content: Text(tr('Это не похоже на ссылку сопряжения'))),
     );
     return false;
   }

@@ -12,6 +12,7 @@ import '../widgets/marquee_text.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
 import 'player_screen.dart';
+import '../l10n/l10n.dart';
 
 /// Список треков плейлиста.
 ///
@@ -169,10 +170,11 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     });
   }
 
-  static const List<(String, String)> _sortOptions = [
-    ('artist', 'По исполнителю'),
-    ('title', 'По названию трека'),
-    ('manual', 'Как попало'),
+  // геттер, а не константа: подписи на текущем языке
+  static List<(String, String)> get _sortOptions => [
+    ('artist', tr('По исполнителю')),
+    ('title', tr('По названию трека')),
+    ('manual', tr('Как попало')),
   ];
 
   String get _sortLabel =>
@@ -194,9 +196,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   Future<void> _delete(TrackInfo t) async {
     final ok = await confirmAction(
       context,
-      title: 'Удалить трек?',
-      message: '«${t.title}» уйдёт в корзину на 30 дней.',
-      confirmLabel: 'Удалить',
+      title: tr('Удалить трек?'),
+      message: tr('«{title}» уйдёт в корзину на 30 дней.', {'title': t.title}),
+      confirmLabel: tr('Удалить'),
       danger: true,
     );
     if (!ok) return;
@@ -206,9 +208,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   Future<void> _deletePlaylist() async {
     final ok = await confirmAction(
       context,
-      title: 'Удалить плейлист?',
-      message: 'Пустая папка «${widget.playlist.name}» будет удалена.',
-      confirmLabel: 'Удалить',
+      title: tr('Удалить плейлист?'),
+      message: tr('Пустая папка «{name}» будет удалена.', {'name': widget.playlist.name}),
+      confirmLabel: tr('Удалить'),
       danger: true,
     );
     if (!ok) return;
@@ -223,13 +225,13 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   Future<void> _move(TrackInfo t) async {
     final targets = hydraLibrary.playlists.where((p) => p.id != widget.playlist.id).toList();
     if (targets.isEmpty) {
-      _toast('Нет другого плейлиста. Создайте его на экране «Плейлисты».');
+      _toast(tr('Нет другого плейлиста. Создайте его на экране «Плейлисты».'));
       return;
     }
     final target = await showDialog<PlaylistInfo>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('Переместить в…'),
+        title: Text(tr('Переместить в…')),
         children: [
           for (final p in targets)
             SimpleDialogOption(
@@ -245,10 +247,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     if (target == null || !mounted) return;
     final ok = await confirmAction(
       context,
-      title: 'Переместить трек?',
-      message: '«${t.title}» будет перенесён из «${widget.playlist.name}» в «${target.name}». '
-          'Файл физически переместится между папками.',
-      confirmLabel: 'Переместить',
+      title: tr('Переместить трек?'),
+      message: tr('«{title}» будет перенесён из «{name}» в «{a1}». Файл физически переместится между папками.', {'title': t.title, 'name': widget.playlist.name, 'a1': target.name}),
+      confirmLabel: tr('Переместить'),
     );
     if (!ok) return;
     await _act(() => hydraLibrary.moveTrack(t.id, target.id));
@@ -294,7 +295,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
           child: PopupMenuButton<String>(
-            tooltip: 'Порядок треков',
+            tooltip: tr('Порядок треков'),
             onSelected: _setSort,
             itemBuilder: (context) => [
               for (final o in _sortOptions)
@@ -312,7 +313,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 children: [
                   const Icon(Icons.sort, color: Metro.green),
                   const SizedBox(width: 12),
-                  Expanded(child: Text('Порядок: $_sortLabel', style: const TextStyle(fontSize: 16))),
+                  Expanded(child: Text(tr('Порядок: {_sortLabel}', {'_sortLabel': _sortLabel}), style: const TextStyle(fontSize: 16))),
                   const Icon(Icons.arrow_drop_down),
                 ],
               ),
@@ -372,7 +373,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.check),
-                  label: const Text('Готово'),
+                  label: Text(tr('Готово')),
                   onPressed: _stopEditing,
                 ),
               ),
@@ -394,7 +395,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 Expanded(
                   child: MetroAction(
                     icon: Icons.play_arrow,
-                    label: 'Играть',
+                    label: tr('Играть'),
                     filled: true,
                     onPressed: () => _play(selected),
                   ),
@@ -403,7 +404,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 Expanded(
                   child: MetroAction(
                     icon: Icons.drive_file_move_outline,
-                    label: 'Переместить',
+                    label: tr('Переместить'),
                     onPressed: () => _move(selected),
                   ),
                 ),
@@ -411,7 +412,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 Expanded(
                   child: MetroAction(
                     icon: Icons.delete_outline,
-                    label: 'Удалить',
+                    label: tr('Удалить'),
                     onPressed: () => _delete(selected),
                   ),
                 ),
@@ -432,11 +433,11 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_editing ? 'редактирование' : widget.playlist.name.toLowerCase()),
+          title: Text(_editing ? tr('редактирование') : widget.playlist.name.toLowerCase()),
           actions: [
             if (!_editing)
               IconButton(
-                tooltip: 'Обновить',
+                tooltip: tr('Обновить'),
                 icon: const Icon(Icons.refresh),
                 onPressed: _refresh,
               ),
@@ -452,14 +453,13 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            'Папка пуста. Положите файлы в Music/Hydra/${widget.playlist.name} '
-                            'и нажмите «Обновить».',
+                            tr('Папка пуста. Положите файлы в Music/Hydra/{name} и нажмите «Обновить».', {'name': widget.playlist.name}),
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 24),
                           OutlinedButton.icon(
                             icon: const Icon(Icons.delete_outline),
-                            label: const Text('Удалить плейлист'),
+                            label: Text(tr('Удалить плейлист')),
                             onPressed: _deletePlaylist,
                           ),
                         ],

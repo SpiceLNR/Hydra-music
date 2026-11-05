@@ -7,6 +7,7 @@ import '../widgets/play_mode_bar.dart';
 import 'cover_image.dart';
 import 'desktop_settings.dart';
 import 'v_slider.dart';
+import '../l10n/l10n.dart';
 
 String _fmt(Duration d) {
   final m = d.inMinutes;
@@ -108,14 +109,14 @@ class _PlayerPanelState extends State<PlayerPanel> {
                           const SizedBox(height: 4),
                         ],
                         Text(
-                          track?.title ?? 'Ничего не играет',
+                          track?.title ?? tr('Ничего не играет'),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          track == null ? 'Выберите трек в списке' : (track.artist ?? track.fileName),
+                          track == null ? tr('Выберите трек в списке') : (track.artist ?? track.fileName),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 14, color: Metro.textDim),
@@ -154,14 +155,14 @@ class _PlayerPanelState extends State<PlayerPanel> {
                 children: [
                   _controlButton(
                     icon: Icons.skip_previous,
-                    tooltip: 'Назад',
+                    tooltip: tr('Назад'),
                     mode: ps.mode,
                     onPressed: hasTrack ? ps.previous : null,
                   ),
                   const SizedBox(width: 4),
                   _controlButton(
                     icon: ps.playing ? Icons.pause : Icons.play_arrow,
-                    tooltip: ps.playing ? 'Пауза' : 'Играть',
+                    tooltip: ps.playing ? tr('Пауза') : tr('Играть'),
                     primary: true,
                     mode: ps.mode,
                     onPressed: hasTrack ? ps.playOrPause : null,
@@ -169,7 +170,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
                   const SizedBox(width: 4),
                   _controlButton(
                     icon: Icons.skip_next,
-                    tooltip: 'Вперёд',
+                    tooltip: tr('Вперёд'),
                     mode: ps.mode,
                     onPressed: hasTrack ? ps.next : null,
                   ),

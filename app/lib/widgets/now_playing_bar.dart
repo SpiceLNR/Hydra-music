@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../player_service.dart';
 import '../screens/player_screen.dart';
 import '../theme.dart';
+import '../l10n/l10n.dart';
 
 /// Панель «Сейчас играет»: название трека, пауза/play, по нажатию открывает плеер.
 /// Скрыта, пока ничего не играло. Ставится внизу экранов (кроме настроек и самого плеера).
@@ -36,14 +37,14 @@ class NowPlayingBar extends StatelessWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          t == null ? 'Сейчас играет' : 'Сейчас играет: ${t.title}',
+                          t == null ? tr('Сейчас играет') : tr('Сейчас играет: {title}', {'title': t.title}),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 16),
                         ),
                       ),
                       IconButton(
-                        tooltip: ps.playing ? 'Пауза' : 'Играть',
+                        tooltip: ps.playing ? tr('Пауза') : tr('Играть'),
                         onPressed: ps.playOrPause,
                         icon: Icon(ps.playing ? Icons.pause : Icons.play_arrow),
                       ),

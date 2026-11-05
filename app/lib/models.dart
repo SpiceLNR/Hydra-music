@@ -1,3 +1,4 @@
+import 'l10n/l10n.dart';
 // Модели данных, приходящих из Rust-ядра (JSON), и временная модель устройства.
 
 /// Массовое удаление вне приложения, ждущее решения пользователя.
@@ -147,7 +148,7 @@ class DeviceInfo {
 
   /// Когда последний раз синхронизировались, в понятном виде.
   String get lastSyncLabel {
-    if (lastSyncMs <= 0) return 'ещё не синхронизировались';
+    if (lastSyncMs <= 0) return tr('ещё не синхронизировались');
     final t = DateTime.fromMillisecondsSinceEpoch(lastSyncMs);
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(t.day)}.${two(t.month)} ${two(t.hour)}:${two(t.minute)}';

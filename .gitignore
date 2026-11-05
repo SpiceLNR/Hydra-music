@@ -17,3 +17,5 @@ identity.json
 hydra.db
 # файл блокировки зависимостей не храним: его создаёт cargo
 Cargo.lock
+# и файл блокировки Dart: его создаёт flutter pub get (в CI тоже)
+app/pubspec.lock

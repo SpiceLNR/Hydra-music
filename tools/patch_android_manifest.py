@@ -115,8 +115,10 @@ class SyncService : Service() {
         val channelId = "hydra_sync"
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // название канала - на языке приложения (передаёт Dart), русское - запасное
+            val channelName = intent?.getStringExtra("channel")?.takeIf { it.isNotEmpty() } ?: "Синхронизация"
             nm.createNotificationChannel(
-                NotificationChannel(channelId, "Синхронизация", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
             )
         }
         val busy = intent?.getBooleanExtra("busy", true) ?: true
@@ -293,6 +295,7 @@ class MainActivity : AudioServiceActivity() {
                             val intent = Intent(this, SyncService::class.java)
                             intent.putExtra("text", call.argument<String>("text") ?: "")
                             intent.putExtra("busy", call.argument<Boolean>("busy") ?: true)
+                            intent.putExtra("channel", call.argument<String>("channel") ?: "")
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)
                             } else {

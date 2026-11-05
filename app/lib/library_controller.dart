@@ -9,6 +9,7 @@ import 'core_bridge.dart';
 import 'models.dart';
 import 'net_service.dart';
 import 'player_service.dart';
+import 'l10n/l10n.dart';
 
 enum LibraryStatus { idle, loading, needPermission, ready, error }
 
@@ -97,7 +98,7 @@ class LibraryController extends ChangeNotifier {
     } catch (e) {
       error ??= e;
     }
-    if (!saved) notice = 'Папка выбрана, но выбор не сохранился: $error';
+    if (!saved) notice = tr('Папка выбрана, но выбор не сохранился: {error}', {'error': error});
   }
 
   /// Начинает работать с уже существующей папкой без переноса файлов

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../player_service.dart';
 import '../theme.dart';
+import '../l10n/l10n.dart';
 
 const Map<PlayMode, IconData> _icons = {
   PlayMode.repeat: Icons.repeat_one,
@@ -10,11 +11,12 @@ const Map<PlayMode, IconData> _icons = {
   PlayMode.anarchy: Icons.local_fire_department,
 };
 
-const Map<PlayMode, String> _names = {
-  PlayMode.repeat: 'Повтор',
-  PlayMode.standard: 'Стандартный',
-  PlayMode.shuffle: 'Разнобой',
-  PlayMode.anarchy: 'Анархия',
+// геттер, а не константа: названия на текущем языке
+Map<PlayMode, String> get _names => {
+  PlayMode.repeat: tr('Повтор'),
+  PlayMode.standard: tr('Стандартный'),
+  PlayMode.shuffle: tr('Разнобой'),
+  PlayMode.anarchy: tr('Анархия'),
 };
 
 /// Цвет акцента плеера: зелёный, а в «Анархии» красный. Им окрашены все

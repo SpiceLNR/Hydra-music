@@ -10,6 +10,7 @@ import 'devices_screen.dart';
 import 'playlists_screen.dart';
 import 'settings_screen.dart';
 import 'trash_screen.dart';
+import '../l10n/l10n.dart';
 
 /// Главный экран: сетка плиток-кнопок. Без панорамы и свайпов.
 class HomeScreen extends StatefulWidget {
@@ -41,9 +42,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
 
   String _playlistsSubtitle(LibraryController lib) {
-    if (lib.status != LibraryStatus.ready) return 'библиотека';
+    if (lib.status != LibraryStatus.ready) return tr('библиотека');
     final tracks = lib.playlists.fold<int>(0, (n, p) => n + p.trackCount);
-    return '${lib.playlists.length} папок, $tracks треков';
+    return '${plural(lib.playlists.length, 'папка', 'папки', 'папок')}, ${plural(tracks, 'трек', 'трека', 'треков')}';
   }
 
   @override
@@ -63,7 +64,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   child: const Text('HYDRA MUSIC',
                       style: const TextStyle(fontSize: 14, letterSpacing: 2, color: Metro.green)),
                 ),
-                const SectionTitle('главная'),
+                SectionTitle(tr('главная')),
                 _StatusBanner(lib: hydraLibrary),
                 const HeldBanner(),
                 Padding(
@@ -76,27 +77,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     physics: const NeverScrollableScrollPhysics(),
                     children: [
                       MetroTile(
-                        label: 'Плейлисты',
+                        label: tr('Плейлисты'),
                         subtitle: _playlistsSubtitle(hydraLibrary),
                         icon: Icons.queue_music,
                         onTap: ready ? () => _open(const PlaylistsScreen()) : null,
                       ),
                       MetroTile(
-                        label: 'Устройства',
-                        subtitle: 'синхронизация',
+                        label: tr('Устройства'),
+                        subtitle: tr('синхронизация'),
                         icon: Icons.devices,
                         color: Metro.greenDark,
                         onTap: ready ? () => _open(const DevicesScreen()) : null,
                       ),
                       MetroTile(
-                        label: 'Корзина',
-                        subtitle: 'хранится 30 дней',
+                        label: tr('Корзина'),
+                        subtitle: tr('хранится 30 дней'),
                         icon: Icons.delete_outline,
                         color: Metro.surface,
                         onTap: ready ? () => _open(const TrashScreen()) : null,
                       ),
                       MetroTile(
-                        label: 'Настройки',
+                        label: tr('Настройки'),
                         icon: Icons.settings,
                         color: Metro.surface,
                         onTap: () => _open(const SettingsScreen()),
@@ -125,25 +126,25 @@ class _StatusBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final children = <Widget>[];
     if (lib.status == LibraryStatus.loading || lib.scanning) {
-      children.addAll(const [
+      children.addAll([
         MetroProgress(),
         SizedBox(height: 8),
-        Text('Сканирую библиотеку…'),
+        Text(tr('Сканирую библиотеку…')),
       ]);
     } else if (lib.status == LibraryStatus.needPermission) {
       children.addAll([
-        const Text('Нужен доступ ко всем файлам, чтобы работать с папкой Music/Hydra.'),
+        Text(tr('Нужен доступ ко всем файлам, чтобы работать с папкой Music/Hydra.')),
         const SizedBox(height: 8),
         ElevatedButton(
           onPressed: lib.requestPermission,
-          child: const Text('Разрешить доступ'),
+          child: Text(tr('Разрешить доступ')),
         ),
       ]);
     } else if (lib.status == LibraryStatus.error) {
       children.addAll([
-        Text('Ошибка: ${lib.error ?? 'неизвестная'}', style: const TextStyle(color: Metro.danger)),
+        Text(tr('Ошибка: {a1}', {'a1': lib.error ?? tr('неизвестная')}), style: const TextStyle(color: Metro.danger)),
         const SizedBox(height: 8),
-        ElevatedButton(onPressed: lib.init, child: const Text('Повторить')),
+        ElevatedButton(onPressed: lib.init, child: Text(tr('Повторить'))),
       ]);
     }
     if (lib.notice != null) {

@@ -6,6 +6,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/metro_widgets.dart';
 import '../widgets/now_playing_bar.dart';
+import '../l10n/l10n.dart';
 
 /// Корзина: удалённые в приложении треки хранятся 30 дней, потом стираются сами.
 class TrashScreen extends StatefulWidget {
@@ -57,7 +58,7 @@ class _TrashScreenState extends State<TrashScreen> {
     try {
       await hydraLibrary.restoreTrack(id);
       if (remote && mounted) {
-        _toast('Трек вернулся в плейлист: файл придёт с другого устройства при синхронизации');
+        _toast(tr('Трек вернулся в плейлист: файл придёт с другого устройства при синхронизации'));
       }
     } on CoreException catch (e) {
       if (mounted) _toast(e.message);
@@ -68,9 +69,9 @@ class _TrashScreenState extends State<TrashScreen> {
   Future<void> _purge(TrashItem item) async {
     final ok = await confirmAction(
       context,
-      title: 'Удалить навсегда?',
-      message: '«${item.title}» будет стёрт без возможности восстановления.',
-      confirmLabel: 'Удалить',
+      title: tr('Удалить навсегда?'),
+      message: tr('«{title}» будет стёрт без возможности восстановления.', {'title': item.title}),
+      confirmLabel: tr('Удалить'),
       danger: true,
     );
     if (!ok) return;
@@ -85,9 +86,9 @@ class _TrashScreenState extends State<TrashScreen> {
   Future<void> _emptyAll() async {
     final ok = await confirmAction(
       context,
-      title: 'Очистить корзину?',
-      message: 'Все треки в корзине (${_items.length}) будут стёрты без возможности восстановления.',
-      confirmLabel: 'Очистить',
+      title: tr('Очистить корзину?'),
+      message: tr('Все треки в корзине ({length}) будут стёрты без возможности восстановления.', {'length': _items.length}),
+      confirmLabel: tr('Очистить'),
       danger: true,
     );
     if (!ok) return;
@@ -102,24 +103,23 @@ class _TrashScreenState extends State<TrashScreen> {
   String _age(int deletedMs) {
     final days = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(deletedMs)).inDays;
     final left = (30 - days).clamp(0, 30);
-    final when = days <= 0 ? 'удалён сегодня' : 'удалён $days дн. назад';
-    return '$when, осталось $left дн.';
+    final when = days <= 0 ? tr('удалён сегодня') : tr('удалён {days} дн. назад', {'days': days});
+    return tr('{when}, осталось {left} дн.', {'when': when, 'left': left});
   }
 
   @override
   Widget build(BuildContext context) {
     final selected = _selected;
     return Scaffold(
-      appBar: AppBar(title: const Text('корзина')),
+      appBar: AppBar(title: Text(tr('корзина'))),
       body: _loading
           ? const Center(child: SizedBox(width: 200, child: MetroProgress()))
           : _items.isEmpty
-              ? const Center(
+              ? Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      'Корзина пуста.\nУдалённые треки хранятся здесь 30 дней, '
-                      'затем стираются окончательно.',
+                      tr('Корзина пуста.\nУдалённые треки хранятся здесь 30 дней, затем стираются окончательно.'),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -136,7 +136,7 @@ class _TrashScreenState extends State<TrashScreen> {
                         title: Text(item.title, style: const TextStyle(fontSize: 18)),
                         subtitle: Text(
                           '${item.fileName} · ${_age(item.deletedMs)}'
-                          '${item.hasFile ? '' : ' · файл на другом устройстве'}',
+                              '${item.hasFile ? '' : tr(' · файл на другом устройстве')}',
                         ),
                         onTap: () => setState(() => _selectedId = isSel ? null : item.id),
                       ),
@@ -158,7 +158,7 @@ class _TrashScreenState extends State<TrashScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.restore),
-                      label: const Text('Восстановить'),
+                      label: Text(tr('Восстановить')),
                       onPressed: selected == null ? null : () => _restore(selected.id),
                     ),
                   ),
@@ -166,7 +166,7 @@ class _TrashScreenState extends State<TrashScreen> {
                   Expanded(
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.delete_forever),
-                      label: const Text('Навсегда'),
+                      label: Text(tr('Навсегда')),
                       onPressed: selected == null ? null : () => _purge(selected),
                     ),
                   ),
@@ -177,7 +177,7 @@ class _TrashScreenState extends State<TrashScreen> {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.delete_sweep_outlined),
-                  label: const Text('Очистить корзину'),
+                  label: Text(tr('Очистить корзину')),
                   onPressed: _items.isEmpty ? null : _emptyAll,
                 ),
               ),
