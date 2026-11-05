@@ -269,6 +269,36 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     });
   }
 
+  static const List<(String, String, IconData)> _sortOptions = [
+    ('artist', 'По исполнителю', Icons.person_outline),
+    ('title', 'По названию трека', Icons.title),
+    ('manual', 'Как попало', Icons.swap_vert),
+  ];
+
+  /// Правило порядка треков текущего плейлиста. «По исполнителю» и «по названию» сразу
+  /// пересортировывают треки, новые встают на своё место сами; у текущего правила - отметка.
+  Future<void> _sortMenu(Offset pos, PlaylistInfo p) async {
+    final mode = await showMetroMenu<String>(context, pos, [
+      for (final o in _sortOptions)
+        MetroMenuItem(
+          value: o.$1,
+          label: o.$2,
+          icon: o.$1 == p.sortMode ? Icons.check : o.$3,
+        ),
+    ]);
+    if (mode == null || mode == p.sortMode) return;
+    _queue = _queue.then((_) async {
+      try {
+        await hydraLibrary.setPlaylistSort(p.id, mode);
+      } on CoreException catch (e) {
+        _toast(e.message);
+      }
+      await _loadTracks();
+      // играющая очередь повторяет новый порядок плейлиста
+      if (p.id == _playlistId) unawaited(PlayerService.instance.syncOrder(_tracks));
+    });
+  }
+
   Future<void> _playlistMenu(Offset pos, PlaylistInfo p) async {
     final action = await showMetroMenu<_PlaylistAction>(context, pos, const [
       MetroMenuItem(value: _PlaylistAction.open, label: 'Открыть', icon: Icons.folder_open),
@@ -448,6 +478,7 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     if (newIndex == oldIndex) return;
     final moved = _tracks[oldIndex];
     final target = newIndex;
+    final pl = _current;
     setState(() {
       final list = List<TrackInfo>.of(_tracks);
       list.removeAt(oldIndex);
@@ -456,6 +487,10 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
     });
     _queue = _queue.then((_) async {
       try {
+        // ручная перестановка отключает правило сортировки, иначе оно вернуло бы всё назад
+        if (pl != null && pl.sortMode != 'manual') {
+          await hydraLibrary.setPlaylistSort(pl.id, 'manual');
+        }
         await hydraLibrary.reorder(moved.id, target);
         // играющая очередь повторяет новый порядок плейлиста
         unawaited(PlayerService.instance.syncOrder(_tracks));
@@ -637,6 +672,8 @@ class _ExpandedShellState extends State<_ExpandedShell> with WidgetsBindingObser
       color: Metro.green,
       child: InkWell(
         onTap: () => setState(() => _listOpen = !_listOpen),
+        // правый клик по текущему плейлисту: правило порядка треков
+        onSecondaryTapUp: p == null ? null : (d) => _sortMenu(d.globalPosition, p),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
