@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -33,28 +34,54 @@ class PairLink {
   /// Адрес устройства в интернете (iroh); пусто, если связь через интернет выключена.
   final String endpoint;
 
-  /// `hydra://pair?k=..&s=..&p=..&a=ip1,ip2&e=..` (короче код = проще считывается камерой).
+  /// Порт обмена по умолчанию: в ссылку он не пишется.
+  static const defaultPort = 47475;
+
+  /// `hydra://pair?k=..&s=..&a=ip1,ip2&e=..[&p=..]` (короче код = проще считывается камерой).
+  /// Ключ, секрет и адрес iroh (по 32 байта) - в base64url без `=`: 43 знака вместо 64 в hex.
+  /// Порт пишется, только если он не стандартный.
   String toUri() => Uri(
         scheme: 'hydra',
         host: 'pair',
         queryParameters: {
-          'k': publicKey,
-          's': secret,
-          'p': '$port',
+          'k': compact(publicKey),
+          's': compact(secret),
+          if (port != defaultPort) 'p': '$port',
           'a': addrs.join(','),
-          if (endpoint.isNotEmpty) 'e': endpoint,
+          if (endpoint.isNotEmpty) 'e': compact(endpoint),
         },
       ).toString();
+
+  /// 32 байта в hex -> base64url без `=`. Что-то другое возвращается как есть.
+  static String compact(String hex) {
+    if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(hex)) return hex;
+    final bytes = [for (var i = 0; i < 64; i += 2) int.parse(hex.substring(i, i + 2), radix: 16)];
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  /// Обратно в hex (его ждёт ядро). Понимает и hex из старых ссылок; null, если не 32 байта.
+  static String? expand(String value) {
+    if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value)) return value.toLowerCase();
+    if (!RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(value)) return null;
+    try {
+      final bytes = base64Url.decode(base64Url.normalize(value));
+      if (bytes.length != 32) return null;
+      return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    } on FormatException {
+      return null;
+    }
+  }
 
   static PairLink? parse(String text) {
     final uri = Uri.tryParse(text.trim());
     if (uri == null || uri.scheme != 'hydra' || uri.host != 'pair') return null;
     final q = uri.queryParameters;
-    final port = int.tryParse(q['p'] ?? '');
+    final port = q.containsKey('p') ? int.tryParse(q['p']!) : defaultPort;
     final addrs = (q['a'] ?? '').split(',').where((a) => a.isNotEmpty).toList();
-    final key = q['k'];
-    final secret = q['s'];
-    final endpoint = q['e'] ?? '';
+    final key = expand(q['k'] ?? '');
+    final secret = expand(q['s'] ?? '');
+    final rawEndpoint = q['e'] ?? '';
+    final endpoint = rawEndpoint.isEmpty ? '' : (expand(rawEndpoint) ?? rawEndpoint);
     if (port == null || (addrs.isEmpty && endpoint.isEmpty) || key == null || secret == null) {
       return null;
     }
