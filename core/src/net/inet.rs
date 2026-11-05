@@ -8,7 +8,7 @@
 use super::channel::Transport;
 use crate::{Error, Result};
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointId, SecretKey};
+use iroh::{Endpoint, EndpointId, RelayMode, RelayUrl, SecretKey};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,8 +108,15 @@ impl Inet {
     /// в отдельном потоке.
     pub fn start(
         secret: [u8; 32],
+        relay: Option<&str>,
         on_stream: Arc<dyn Fn(IrohStream) + Send + Sync + 'static>,
     ) -> Result<Arc<Inet>> {
+        // свой relay-сервер вместо общедоступных серверов n0; поиск устройств по ключу
+        // (DNS n0) остаётся прежним
+        let relay_mode = match relay.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(url) => Some(RelayMode::custom([parse_relay(url)?])),
+            None => None,
+        };
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("hydra-iroh")
@@ -118,11 +125,13 @@ impl Inet {
             .map_err(err)?;
         let ep = rt
             .block_on(async {
-                Endpoint::builder(presets::N0)
+                let mut builder = Endpoint::builder(presets::N0)
                     .secret_key(SecretKey::from_bytes(&secret))
-                    .alpns(vec![ALPN.to_vec()])
-                    .bind()
-                    .await
+                    .alpns(vec![ALPN.to_vec()]);
+                if let Some(mode) = relay_mode {
+                    builder = builder.relay_mode(mode);
+                }
+                builder.bind().await
             })
             .map_err(err)?;
         let id = ep.id().to_string();
@@ -157,6 +166,12 @@ impl Inet {
         &self.id
     }
 
+    /// Закрывает узел (перед перезапуском с другим relay-сервером).
+    pub fn close(&self) {
+        let ep = self.ep.clone();
+        self.rt.block_on(async move { ep.close().await });
+    }
+
     /// Соединяется с устройством по его адресу iroh.
     pub fn connect(&self, id: &str) -> Result<IrohStream> {
         let target: EndpointId = id
@@ -184,5 +199,46 @@ impl Inet {
             Ok(Err(e)) => Err(err(e)),
             Ok(Ok(stream)) => Ok(stream),
         }
+    }
+}
+
+/// Проверяет адрес relay-сервера: полный адрес http(s) с именем сервера.
+fn parse_relay(url: &str) -> Result<RelayUrl> {
+    let parsed: RelayUrl = url
+        .trim()
+        .parse()
+        .map_err(|_| err(format!("адрес relay-сервера не подходит: «{url}»")))?;
+    if !matches!(parsed.scheme(), "https" | "http") || parsed.host_str().is_none() {
+        return Err(err(format!(
+            "адрес relay-сервера должен начинаться с https://: «{url}»"
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Приводит адрес relay-сервера к виду, в котором его хранит приложение; пустой - сервер
+/// по умолчанию (n0).
+pub fn normalize_relay(url: &str) -> Result<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(parse_relay(url)?.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_address_rules() {
+        assert_eq!(normalize_relay("  ").unwrap(), "");
+        assert_eq!(
+            normalize_relay(" https://relay.example.com ").unwrap(),
+            "https://relay.example.com/"
+        );
+        assert!(normalize_relay("relay.example.com").is_err(), "без схемы");
+        assert!(normalize_relay("ftp://relay.example.com").is_err());
+        assert!(normalize_relay("https://").is_err());
     }
 }

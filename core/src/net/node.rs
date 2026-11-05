@@ -46,6 +46,8 @@ struct Status {
     endpoint: String,
     /// Почему связь через интернет не заработала (пусто, если всё в порядке или не включалась).
     internet_error: String,
+    /// Свой relay-сервер, с которым поднята связь через интернет; пусто - серверы n0.
+    relay: String,
 }
 
 pub struct Node<H> {
@@ -163,22 +165,29 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     /// Включает связь через интернет с постоянным ключом `secret`. Ошибка не мешает работе
     /// в локальной сети: причина видна в `status` (`internet_error`).
     #[cfg(feature = "internet")]
-    pub fn enable_internet(self: &Arc<Self>, secret: [u8; 32]) -> Result<()> {
+    /// Включает связь через интернет. [relay]: свой relay-сервер (пусто - серверы n0).
+    pub fn enable_internet(self: &Arc<Self>, secret: [u8; 32], relay: &str) -> Result<()> {
         if lock(&self.inet).is_some() {
             return Ok(());
         }
         let me = Arc::clone(self);
         let on_stream: Arc<dyn Fn(super::inet::IrohStream) + Send + Sync> =
             Arc::new(move |stream| Arc::clone(&me).incoming(Box::new(stream), String::new()));
-        match super::inet::Inet::start(secret, on_stream) {
+        let relay = relay.trim();
+        match super::inet::Inet::start(secret, Some(relay), on_stream) {
             Ok(inet) => {
                 let id = inet.id().to_string();
                 *lock(&self.inet) = Some(inet);
                 let mut st = lock(&self.st);
                 st.endpoint = id;
+                st.relay = relay.to_string();
                 st.internet_error.clear();
                 drop(st);
-                self.log("Связь через интернет включена");
+                if relay.is_empty() {
+                    self.log("Связь через интернет включена");
+                } else {
+                    self.log(&format!("Связь через интернет включена (relay: {relay})"));
+                }
                 Ok(())
             }
             Err(e) => {
@@ -190,9 +199,20 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     }
 
     #[cfg(not(feature = "internet"))]
-    pub fn enable_internet(self: &Arc<Self>, _secret: [u8; 32]) -> Result<()> {
+    pub fn enable_internet(self: &Arc<Self>, _secret: [u8; 32], _relay: &str) -> Result<()> {
         lock(&self.st).internet_error = "сборка без связи через интернет".to_string();
         Err(bad("сборка без связи через интернет"))
+    }
+
+    /// Перезапускает связь через интернет с другим relay-сервером. Ключ тот же, поэтому
+    /// адрес устройства для остальных не меняется.
+    #[cfg(feature = "internet")]
+    pub fn restart_internet(self: &Arc<Self>, secret: [u8; 32], relay: &str) -> Result<()> {
+        let old = lock(&self.inet).take();
+        if let Some(old) = old {
+            old.close();
+        }
+        self.enable_internet(secret, relay)
     }
 
     #[cfg(feature = "internet")]
@@ -932,6 +952,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             "family_generation": st.family_generation,
             "endpoint": st.endpoint,
             "internet_error": st.internet_error,
+            "relay": st.relay,
             "log": st.log.iter().collect::<Vec<_>>(),
             "report": st.report,
         })
@@ -1051,6 +1072,38 @@ mod tests {
 
         // посторонний без пары синхронизироваться не может
         assert!(c.sync_peer(&a_id).is_err());
+    }
+
+    /// Смена relay-сервера перезапускает связь через интернет, а адрес устройства
+    /// (ключ iroh) остаётся прежним: сопряжённые устройства его не теряют.
+    #[cfg(feature = "internet")]
+    #[test]
+    fn relay_change_keeps_the_device_address() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, _lib) = make(tmp.path(), "phone");
+        let secret = [7u8; 32];
+        a.enable_internet(secret, "").unwrap();
+        let id = a.status_json()["endpoint"].as_str().unwrap().to_string();
+        assert!(!id.is_empty());
+        assert_eq!(a.status_json()["relay"], "");
+
+        a.restart_internet(secret, "https://relay.example.com/")
+            .unwrap();
+        let st = a.status_json();
+        assert_eq!(st["endpoint"], id.as_str(), "адрес устройства не меняется");
+        assert_eq!(st["relay"], "https://relay.example.com/");
+
+        // неверный адрес: связь не поднимается, причина видна в статусе
+        assert!(a.restart_internet(secret, "relay.example.com").is_err());
+        assert!(!a.status_json()["internet_error"]
+            .as_str()
+            .unwrap()
+            .is_empty());
+
+        // обратно на серверы по умолчанию
+        a.restart_internet(secret, "").unwrap();
+        assert_eq!(a.status_json()["relay"], "");
+        assert_eq!(a.status_json()["endpoint"], id.as_str());
     }
 
     #[test]

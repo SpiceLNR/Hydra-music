@@ -308,7 +308,9 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
             .unwrap_or(true)
         {
             if let Ok(secret) = load_or_create_iroh_key(&data_dir) {
-                let _ = n.enable_internet(secret);
+                // свой relay-сервер из настроек; пусто - серверы n0
+                let relay = args["relay"].as_str().unwrap_or("");
+                let _ = n.enable_internet(secret, relay);
             }
         }
         return Ok(n.status_json());
@@ -360,6 +362,19 @@ fn net_call(method: &str, args: &Value) -> Result<Value, String> {
         "net_forget" => to_json(n.forget(&arg_str(args, "device_id")?)),
         "net_rename" => {
             to_json(n.rename_peer(&arg_str(args, "device_id")?, &arg_str(args, "name")?))
+        }
+        // свой relay-сервер: адрес проверяется, связь через интернет перезапускается с тем же
+        // ключом (адрес устройства не меняется). Пусто - серверы n0. Ответ: адрес в том виде,
+        // в котором его стоит сохранить, и статус.
+        "net_set_relay" => {
+            let relay =
+                hydra_core::net::inet::normalize_relay(&arg_str(args, "relay")?).map_err(es)?;
+            let data_dir = with_state(|st| Ok(st.data_dir.clone()))?;
+            let secret = load_or_create_iroh_key(&data_dir)?;
+            let res = n.restart_internet(secret, &relay);
+            let status = n.status_json();
+            res.map_err(es)?;
+            Ok(json!({ "relay": relay, "status": status }))
         }
         // своё имя: сохраняется в identity.json и сразу действует
         "net_set_name" => {

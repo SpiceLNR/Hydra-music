@@ -24,8 +24,10 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObserver {
-  final relay = TextEditingController(text: 'по умолчанию (общедоступный)');
   bool? _batteryFree; // null: ещё не узнали
+
+  /// Проверка ядра: один раз при открытии экрана (строка видна только при ошибке).
+  late final Future<dynamic> _core = Core.call('version');
 
   @override
   void initState() {
@@ -131,7 +133,6 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    relay.dispose();
     super.dispose();
   }
 
@@ -141,14 +142,57 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     if (state == AppLifecycleState.resumed) _readBattery();
   }
 
-  String _internetText() {
-    if (!hydraNet.internetOn) return 'Выключено: устройства синхронизируются только в одной сети Wi-Fi.';
+  /// Что не так со связью через интернет (null - всё в порядке или она выключена).
+  String? _internetProblem() {
+    if (!hydraNet.internetOn) return null;
     if (hydraNet.internetError.isNotEmpty) return 'Не запустилось: ${hydraNet.internetError}';
-    if (hydraNet.endpoint.isEmpty) {
-      return 'Включено. Заработает после перезапуска приложения.';
-    }
-    return 'Работает. Устройства из вашей семьи находят друг друга и вне дома: '
-        'напрямую или через промежуточный сервер. Музыка при этом идёт зашифрованной.';
+    if (hydraNet.endpoint.isEmpty) return 'Заработает после перезапуска приложения.';
+    return null;
+  }
+
+  /// Свой relay-сервер: адрес https://...; пусто - общедоступные серверы n0.
+  Future<void> _editRelay() async {
+    final controller = TextEditingController(text: hydraNet.relay);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Relay-сервер'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(hintText: 'https://relay.example.com'),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Через него устройства связываются, когда напрямую не получается. '
+              'Пустое поле - общедоступные серверы n0. Музыка идёт зашифрованной.',
+              style: TextStyle(fontSize: 13, color: Metro.textDim),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, ''), child: const Text('По умолчанию')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value == null || value.trim() == hydraNet.relay) return;
+    final err = await hydraNet.setRelay(value);
+    if (!mounted) return;
+    _toast(err == null
+        ? (value.trim().isEmpty ? 'Relay: серверы по умолчанию' : 'Relay-сервер сохранён')
+        : 'Relay не изменён: $err');
   }
 
   Future<void> _readBattery() async {
@@ -203,174 +247,210 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('настройки')),
-      body: ListView(
-        padding: const EdgeInsets.all(8),
-        children: [
-          if (Platform.isWindows) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
-              child: Text('Окно (Windows)', style: TextStyle(fontSize: 20)),
-            ),
-            ListenableBuilder(
-              listenable: DesktopSettings.instance,
-              builder: (context, _) {
-                final s = DesktopSettings.instance;
-                Widget side(String label, bool right) {
-                  final selected = s.dockRight == right;
-                  void choose() {
-                    s.setDockRight(right);
-                    DockController.instance.reapply();
-                  }
+      body: ListenableBuilder(
+        listenable: hydraNet,
+        builder: (context, _) {
+          final problem = _internetProblem();
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
+            children: [
+              const _Section('Это устройство'),
+              _ValueRow(
+                title: 'Имя',
+                value: hydraNet.deviceName.isEmpty ? '…' : hydraNet.deviceName,
+                onTap: _editName,
+              ),
 
-                  return Expanded(
-                    child: selected
-                        ? ElevatedButton(onPressed: choose, child: Text(label))
-                        : OutlinedButton(onPressed: choose, child: Text(label)),
-                  );
-                }
+              const _Section('Синхронизация'),
+              MetroSwitchRow(
+                title: 'Автоматически',
+                value: hydraNet.autoSync,
+                onChanged: hydraNet.setAutoSync,
+              ),
+              if (Platform.isAndroid)
+                MetroSwitchRow(
+                  title: 'Только во время зарядки',
+                  value: hydraNet.autoOnlyCharging,
+                  onChanged: hydraNet.autoSync ? hydraNet.setAutoOnlyCharging : (_) {},
+                ),
+              MetroSwitchRow(
+                title: 'Через интернет',
+                value: hydraNet.internetOn,
+                onChanged: hydraNet.setInternetOn,
+              ),
+              if (problem != null)
+                _Note(problem, error: hydraNet.internetError.isNotEmpty),
+              if (Platform.isAndroid)
+                MetroSwitchRow(
+                  title: 'Через интернет только по Wi-Fi',
+                  value: hydraNet.internetWifiOnly,
+                  onChanged: hydraNet.internetOn ? hydraNet.setInternetWifiOnly : (_) {},
+                ),
+              _ValueRow(
+                title: 'Relay-сервер',
+                value: hydraNet.relay.isEmpty ? 'по умолчанию' : hydraNet.relay,
+                onTap: _editRelay,
+              ),
+              if (Platform.isAndroid && _batteryFree != true)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: OutlinedButton(
+                    onPressed: hydraNet.requestBatteryExempt,
+                    child: const Text('Разрешить работу в фоне'),
+                  ),
+                ),
 
-                return Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Сторона закрепления', style: TextStyle(fontSize: 18)),
-                          const SizedBox(height: 8),
-                          Row(children: [side('Слева', false), const SizedBox(width: 8), side('Справа', true)]),
-                        ],
-                      ),
-                    ),
-                    MetroSwitchRow(
-                      title: 'Сворачиваться в полоску при клике вне окна',
-                      value: s.autoCollapse,
-                      onChanged: s.setAutoCollapse,
-                    ),
-                  ],
-                );
-              },
+              const _Section('Библиотека'),
+              _ValueRow(
+                title: 'Папка',
+                value: hydraLibrary.rootPath ?? '…',
+                onTap: _changeRoot,
+              ),
+
+              if (Platform.isWindows) ...[
+                const _Section('Окно'),
+                ListenableBuilder(
+                  listenable: DesktopSettings.instance,
+                  builder: (context, _) {
+                    final s = DesktopSettings.instance;
+                    Widget side(String label, bool right) {
+                      final selected = s.dockRight == right;
+                      void choose() {
+                        s.setDockRight(right);
+                        DockController.instance.reapply();
+                      }
+
+                      return Expanded(
+                        child: selected
+                            ? ElevatedButton(onPressed: choose, child: Text(label))
+                            : OutlinedButton(onPressed: choose, child: Text(label)),
+                      );
+                    }
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+                          child: Row(
+                            children: [
+                              const Expanded(
+                                  child: Text('Сторона', style: TextStyle(fontSize: 18))),
+                              SizedBox(
+                                width: 200,
+                                child: Row(children: [
+                                  side('Слева', false),
+                                  const SizedBox(width: 8),
+                                  side('Справа', true),
+                                ]),
+                              ),
+                            ],
+                          ),
+                        ),
+                        MetroSwitchRow(
+                          title: 'Сворачивать при клике вне окна',
+                          value: s.autoCollapse,
+                          onChanged: s.setAutoCollapse,
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const _AutostartRow(),
+              ],
+
+              const _Section('Обновления'),
+              const _UpdateTile(),
+              // ядро показываем, только если оно не запустилось: тогда тут причина
+              FutureBuilder<dynamic>(
+                future: _core,
+                builder: (context, snap) => snap.hasError
+                    ? _Note('Ядро не запустилось: ${snap.error}', error: true)
+                    : const SizedBox.shrink(),
+              ),
+
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 32, 16, 0),
+                child: Text(
+                  'Hydra Music · SpiceLNR · PolyForm Noncommercial',
+                  style: TextStyle(fontSize: 13, color: Metro.textDim),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Заголовок раздела настроек: зелёный, строчными буквами, как в Windows Phone.
+class _Section extends StatelessWidget {
+  const _Section(this.title);
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 24, 16, 6),
+      child: Text(
+        title.toLowerCase(),
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w300, color: Metro.green),
+      ),
+    );
+  }
+}
+
+/// Строка «название - значение ›»: по нажатию открывается изменение.
+class _ValueRow extends StatelessWidget {
+  const _ValueRow({required this.title, required this.value, required this.onTap});
+
+  final String title;
+  final String value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+        child: Row(
+          children: [
+            Text(title, style: const TextStyle(fontSize: 18)),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 16, color: Metro.textDim),
+              ),
             ),
-            const _AutostartRow(),
-            const Divider(),
+            const Icon(Icons.chevron_right, color: Metro.textDim),
           ],
-          ListenableBuilder(
-            listenable: hydraNet,
-            builder: (context, _) => ListTile(
-              title: const Text('Имя этого устройства'),
-              subtitle: Text(hydraNet.deviceName.isEmpty ? '…' : hydraNet.deviceName),
-              trailing: const Icon(Icons.edit_outlined),
-              onTap: _editName,
-            ),
-          ),
-          ListenableBuilder(
-            listenable: hydraNet,
-            builder: (context, _) => Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                MetroSwitchRow(
-                  title: 'Автосинхронизация',
-                  value: hydraNet.autoSync,
-                  onChanged: hydraNet.setAutoSync,
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text(
-                    Platform.isAndroid
-                        ? 'Устройства из вашей семьи сами синхронизируются, когда оказываются в одной '
-                            'сети Wi-Fi. Пока включено, в шторке висит уведомление: так Android не '
-                            'закрывает приложение.'
-                        : 'Устройства из вашей семьи сами синхронизируются, когда оказываются в одной '
-                            'сети Wi-Fi, пока Hydra Music запущена.',
-                    style: const TextStyle(fontSize: 13, color: Metro.textDim),
-                  ),
-                ),
-                MetroSwitchRow(
-                  title: 'Связь через интернет',
-                  value: hydraNet.internetOn,
-                  onChanged: hydraNet.setInternetOn,
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text(
-                    _internetText(),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: hydraNet.internetError.isNotEmpty ? Metro.danger : Metro.textDim,
-                    ),
-                  ),
-                ),
-                if (Platform.isAndroid)
-                  MetroSwitchRow(
-                    title: 'Через интернет только по Wi-Fi',
-                    value: hydraNet.internetWifiOnly,
-                    onChanged: hydraNet.internetOn ? hydraNet.setInternetWifiOnly : (_) {},
-                  ),
-                if (Platform.isAndroid) ...[
-                  MetroSwitchRow(
-                    title: 'Только во время зарядки',
-                    value: hydraNet.autoOnlyCharging,
-                    onChanged: hydraNet.autoSync ? hydraNet.setAutoOnlyCharging : (_) {},
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: OutlinedButton(
-                      onPressed: _batteryFree == true ? null : hydraNet.requestBatteryExempt,
-                      child: Text(_batteryFree == true
-                          ? 'Работа в фоне разрешена'
-                          : 'Разрешить работу в фоне (батарея)'),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Relay-сервер (для связи через интернет)',
-                    style: Theme.of(context).textTheme.bodyMedium),
-                const SizedBox(height: 8),
-                TextField(controller: relay, decoration: Metro.inputDecoration()),
-              ],
-            ),
-          ),
-          const Divider(),
-          ListTile(
-            title: const Text('Папка библиотеки'),
-            subtitle: Text(hydraLibrary.rootPath ?? 'Android: Music/Hydra  ·  Windows: Музыка\\Hydra'),
-            trailing: const Icon(Icons.drive_file_move_outline),
-            onTap: _changeRoot,
-          ),
-          // Проверка связи Flutter <-> Rust (временная диагностика этапа 2)
-          FutureBuilder<dynamic>(
-            future: Core.call('version'),
-            builder: (context, snap) {
-              final String text;
-              if (snap.connectionState != ConnectionState.done) {
-                text = 'проверяю…';
-              } else if (snap.hasError) {
-                text = 'ОШИБКА: ${snap.error}';
-              } else {
-                final v = snap.data as Map<String, dynamic>;
-                text = 'работает (ядро ${v['core']}, мост ${v['ffi']})';
-              }
-              return ListTile(title: const Text('Ядро синхронизации'), subtitle: Text(text));
-            },
-          ),
-          ListTile(
-            title: const Text('Версия'),
-            subtitle: Text('$kVersion (сборка $kBuild)'),
-          ),
-          const _UpdateTile(),
-          const ListTile(
-            title: Text('О приложении'),
-            subtitle: Text('Hydra Music · SpiceLNR · PolyForm Noncommercial'),
-          ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Короткая пометка под настройкой (ошибка - красным).
+class _Note extends StatelessWidget {
+  const _Note(this.text, {this.error = false});
+
+  final String text;
+  final bool error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 13, color: error ? Metro.danger : Metro.textDim),
       ),
     );
   }
@@ -421,19 +501,17 @@ class _UpdateTileState extends State<_UpdateTile> {
         final last = u.lastChecked;
         final String text;
         if (!u.supported) {
-          text = 'Локальная сборка: обновления не проверяются.';
+          text = 'сборка $kBuild · локальная, обновления не проверяются';
         } else if (_checking) {
           text = 'Проверяю…';
         } else if (_result != null) {
           text = _result!;
         } else {
-          text = last == null
-              ? 'Проверяется при запуске и раз в 6 часов.'
-              : 'Последняя проверка в ${_time(last)}. Проверяется при запуске и раз в 6 часов.';
+          text = last == null ? 'сборка $kBuild' : 'сборка $kBuild · проверено в ${_time(last)}';
         }
         return ListTile(
-          title: const Text('Обновления'),
-          subtitle: Text(text),
+          title: Text('Версия $kVersion', style: const TextStyle(fontSize: 18)),
+          subtitle: Text(text, style: const TextStyle(fontSize: 13, color: Metro.textDim)),
           trailing: OutlinedButton(
             onPressed: u.supported && !_checking ? _check : null,
             child: const Text('Проверить'),
@@ -491,15 +569,7 @@ class _AutostartRowState extends State<_AutostartRow> {
           value: _on ?? false,
           onChanged: (v) => _set(v),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            _error != null
-                ? 'Не получилось: $_error'
-                : 'Программа стартует свёрнутой у края экрана, значок - в области уведомлений.',
-            style: TextStyle(fontSize: 13, color: _error != null ? Metro.danger : Metro.textDim),
-          ),
-        ),
+        if (_error != null) _Note('Не получилось: $_error', error: true),
       ],
     );
   }

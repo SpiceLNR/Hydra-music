@@ -197,6 +197,9 @@ class NetService extends ChangeNotifier {
   /// Через интернет синхронизироваться только по неплатной сети (Wi-Fi), а не по мобильному интернету.
   bool internetWifiOnly = true;
 
+  /// Свой relay-сервер для связи через интернет (адрес https://...); пусто - серверы n0.
+  String relay = '';
+
   /// Адрес этого устройства в интернете и причина, если связь через интернет не поднялась.
   String endpoint = '';
   String internetError = '';
@@ -210,6 +213,32 @@ class NetService extends ChangeNotifier {
     } on Object {
       // не сохранилось: заработает до перезапуска
     }
+  }
+
+  /// Свой relay-сервер. Если связь через интернет включена, она сразу перезапускается
+  /// с новым сервером (адрес устройства не меняется). Пустая строка - серверы n0.
+  /// Возвращает текст ошибки или null.
+  Future<String?> setRelay(String value) async {
+    var normalized = value.trim();
+    if (started && internetOn) {
+      try {
+        final r = await Core.call('net_set_relay', {'relay': normalized}) as Map<String, dynamic>;
+        normalized = (r['relay'] as String?) ?? normalized;
+      } on CoreException catch (e) {
+        await _poll();
+        return e.message;
+      }
+    }
+    relay = normalized;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('relay_url', normalized);
+    } on Object {
+      // не сохранилось: заработает до перезапуска
+    }
+    await _poll();
+    return null;
   }
 
   Future<void> setInternetWifiOnly(bool value) async {
@@ -249,6 +278,7 @@ class NetService extends ChangeNotifier {
       autoOnlyCharging = p.getBool('auto_only_charging') ?? false;
       internetOn = p.getBool('internet_on') ?? true;
       internetWifiOnly = p.getBool('internet_wifi_only') ?? true;
+      relay = p.getString('relay_url') ?? '';
     } on Object {
       // настройки не прочитались: остаются значения по умолчанию
     }
@@ -423,7 +453,7 @@ class NetService extends ChangeNotifier {
     await _loadPrefs();
     deviceName = _defaultName();
     try {
-      await Core.call('net_start', {'name': deviceName, 'internet': internetOn});
+      await Core.call('net_start', {'name': deviceName, 'internet': internetOn, 'relay': relay});
       started = true;
       error = '';
     } on CoreException catch (e) {
