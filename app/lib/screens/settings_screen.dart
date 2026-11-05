@@ -11,6 +11,7 @@ import '../desktop/dock_controller.dart';
 import '../library_controller.dart';
 import '../net_service.dart';
 import '../theme.dart';
+import '../updater.dart';
 import '../widgets/metro_widgets.dart';
 
 /// Настройки. Панели «Сейчас играет» здесь нет намеренно.
@@ -311,12 +312,81 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             title: const Text('Версия'),
             subtitle: Text('$kVersion (сборка $kBuild)'),
           ),
+          const _UpdateTile(),
           const ListTile(
             title: Text('О приложении'),
             subtitle: Text('Hydra Music · SpiceLNR · PolyForm Noncommercial'),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// «Обновления»: состояние и кнопка «Проверить» (сразу, не дожидаясь проверки раз в 6 часов).
+class _UpdateTile extends StatefulWidget {
+  const _UpdateTile();
+
+  @override
+  State<_UpdateTile> createState() => _UpdateTileState();
+}
+
+class _UpdateTileState extends State<_UpdateTile> {
+  bool _checking = false;
+  String? _result;
+
+  static String _time(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _check() async {
+    setState(() {
+      _checking = true;
+      _result = null;
+    });
+    final u = UpdateService.instance;
+    final r = await u.check();
+    if (!mounted) return;
+    final where = Platform.isWindows ? 'внизу шторки' : 'на главном экране под плитками';
+    setState(() {
+      _checking = false;
+      _result = switch (r) {
+        CheckResult.newer => 'Доступна версия ${u.info?.version ?? '?'}: плашка $where.',
+        CheckResult.upToDate => 'Установлена последняя версия.',
+        CheckResult.failed => 'Не удалось связаться с GitHub. Проверьте интернет.',
+        CheckResult.busy => 'Обновление ${u.info?.version ?? ''} уже скачивается или готово: плашка $where.',
+        CheckResult.skipped => 'Обновления проверяются только у сборок из GitHub.',
+      };
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = UpdateService.instance;
+    return ListenableBuilder(
+      listenable: u,
+      builder: (context, _) {
+        final last = u.lastChecked;
+        final String text;
+        if (!u.supported) {
+          text = 'Локальная сборка: обновления не проверяются.';
+        } else if (_checking) {
+          text = 'Проверяю…';
+        } else if (_result != null) {
+          text = _result!;
+        } else {
+          text = last == null
+              ? 'Проверяется при запуске и раз в 6 часов.'
+              : 'Последняя проверка в ${_time(last)}. Проверяется при запуске и раз в 6 часов.';
+        }
+        return ListTile(
+          title: const Text('Обновления'),
+          subtitle: Text(text),
+          trailing: OutlinedButton(
+            onPressed: u.supported && !_checking ? _check : null,
+            child: const Text('Проверить'),
+          ),
+        );
+      },
     );
   }
 }

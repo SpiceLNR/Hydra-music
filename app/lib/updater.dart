@@ -13,6 +13,10 @@ import 'core_bridge.dart';
 /// Этапы обновления. Плашка на главном экране показывает каждый по-своему.
 enum UpdateState { idle, available, downloading, paused, preparing, ready, installing, error }
 
+/// Итог проверки: есть новее, установлена последняя, не удалось связаться,
+/// обновление уже идёт (качается или готово), проверка не нужна (локальная сборка).
+enum CheckResult { newer, upToDate, failed, busy, skipped }
+
 /// Описание сборки из `version-windows.json` в релизе `latest`.
 class UpdateInfo {
   const UpdateInfo({
@@ -205,28 +209,34 @@ class UpdateService extends ChangeNotifier {
     throw const HttpException('слишком много перенаправлений');
   }
 
+  /// Когда последний раз удалось прочитать описание версии (для экрана настроек).
+  DateTime? lastChecked;
+
   /// Проверка новой версии. Без сети молчит: плашка просто не появляется.
-  Future<void> check() async {
-    if (!supported) return;
-    if (state != UpdateState.idle && state != UpdateState.available) return;
+  Future<CheckResult> check() async {
+    if (!supported || _dir == null) return CheckResult.skipped;
+    if (state != UpdateState.idle && state != UpdateState.available) return CheckResult.busy;
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
     try {
       final res = await _open(c, '$_baseUrl$_manifest').timeout(const Duration(seconds: 30));
       if (res.statusCode != 200) {
         await res.drain<void>();
-        return;
+        return CheckResult.failed;
       }
       final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 30));
       final i = UpdateInfo.parse(jsonDecode(body));
-      if (state != UpdateState.idle && state != UpdateState.available) return;
-      if (i == null || compareVersions(i.version, kVersion) <= 0) {
-        if (state != UpdateState.idle) {
-          info = null;
-          _set(UpdateState.idle);
-        }
-        return;
+      if (i == null) return CheckResult.failed;
+      lastChecked = DateTime.now();
+      if (state != UpdateState.idle && state != UpdateState.available) return CheckResult.busy;
+      if (compareVersions(i.version, kVersion) <= 0) {
+        info = null;
+        _set(UpdateState.idle);
+        return CheckResult.upToDate;
       }
-      if (info?.version == i.version && info?.sha256 == i.sha256) return;
+      if (info?.version == i.version && info?.sha256 == i.sha256) {
+        notifyListeners();
+        return CheckResult.newer;
+      }
       info = i;
       final part = File(_partPath(i));
       final whole = File(_zipPath(i));
@@ -236,8 +246,10 @@ class UpdateService extends ChangeNotifier {
               ? await whole.length()
               : 0;
       _set(UpdateState.available);
+      return CheckResult.newer;
     } catch (_) {
       // нет сети или GitHub недоступен: проверим позже
+      return CheckResult.failed;
     } finally {
       c.close(force: true);
     }
