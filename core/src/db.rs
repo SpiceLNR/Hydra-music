@@ -104,7 +104,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if has_sort == 0 {
-        conn.execute_batch("ALTER TABLE playlists ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;")?;
+        conn.execute_batch(
+            "ALTER TABLE playlists ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;",
+        )?;
     }
     // Версия 3: файл трека ещё не получен от другого устройства (`pending`).
     let has_pending: i64 = conn.query_row(
@@ -122,7 +124,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if has_sort_mode == 0 {
-        conn.execute_batch("ALTER TABLE playlists ADD COLUMN sort_mode TEXT NOT NULL DEFAULT 'manual';")?;
+        conn.execute_batch(
+            "ALTER TABLE playlists ADD COLUMN sort_mode TEXT NOT NULL DEFAULT 'manual';",
+        )?;
     }
     Ok(())
 }
@@ -136,7 +140,11 @@ mod tests {
         let conn = open_in_memory().unwrap();
         init(&conn).unwrap(); // повторная инициализация не ломает базу
         let v: String = conn
-            .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION.to_string());
     }

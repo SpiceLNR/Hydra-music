@@ -13,6 +13,7 @@
 //! Источник правды - журнал. Всё применяется идемпотентно и в любом порядке доставки.
 
 use super::*;
+use crate::i18n::tr;
 use crate::journal::Op;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -493,9 +494,9 @@ impl Library {
                             "{} ({})",
                             now.file_name,
                             if prior.is_some() {
-                                "был у нас"
+                                tr("был у нас")
                             } else {
-                                "новый"
+                                tr("новый")
                             }
                         ));
                     }
@@ -855,7 +856,7 @@ impl Library {
                 track_id: format!("cover:{c}"),
                 sha256: c.clone(),
                 file_name: format!("{c}.jpg"),
-                playlist: "обложки".to_string(),
+                playlist: tr("обложки").to_string(),
                 have_sha: String::new(),
             });
         }

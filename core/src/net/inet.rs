@@ -6,6 +6,7 @@
 //! Сеансы синхронизации работают в обычных потоках, а async-мир iroh прячется за [`IrohStream`].
 
 use super::channel::Transport;
+use crate::i18n::{tr, trf};
 use crate::{Error, Result};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, RelayMode, RelayUrl, SecretKey};
@@ -41,7 +42,7 @@ impl Read for IrohStream {
         match r {
             Err(_) => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "время ожидания вышло",
+                tr("время ожидания вышло"),
             )),
             Ok(Err(e)) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
             Ok(Ok(None)) => Ok(0),
@@ -59,7 +60,7 @@ impl Write for IrohStream {
         match r {
             Err(_) => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "время ожидания вышло",
+                tr("время ожидания вышло"),
             )),
             Ok(Err(e)) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
             Ok(Ok(())) => Ok(buf.len()),
@@ -177,7 +178,7 @@ impl Inet {
         let target: EndpointId = id
             .trim()
             .parse()
-            .map_err(|e| err(format!("адрес устройства повреждён: {e}")))?;
+            .map_err(|e| err(trf("адрес устройства повреждён: {e}", &[("e", &e)])))?;
         let ep = self.ep.clone();
         let handle = self.rt.handle().clone();
         let res = self.rt.block_on(async move {
@@ -195,7 +196,7 @@ impl Inet {
             .await
         });
         match res {
-            Err(_) => Err(err("устройство не отвечает")),
+            Err(_) => Err(err(tr("устройство не отвечает"))),
             Ok(Err(e)) => Err(err(e)),
             Ok(Ok(stream)) => Ok(stream),
         }
@@ -204,13 +205,16 @@ impl Inet {
 
 /// Проверяет адрес relay-сервера: полный адрес http(s) с именем сервера.
 fn parse_relay(url: &str) -> Result<RelayUrl> {
-    let parsed: RelayUrl = url
-        .trim()
-        .parse()
-        .map_err(|_| err(format!("адрес relay-сервера не подходит: «{url}»")))?;
+    let parsed: RelayUrl = url.trim().parse().map_err(|_| {
+        err(trf(
+            "адрес relay-сервера не подходит: «{url}»",
+            &[("url", &url)],
+        ))
+    })?;
     if !matches!(parsed.scheme(), "https" | "http") || parsed.host_str().is_none() {
-        return Err(err(format!(
-            "адрес relay-сервера должен начинаться с https://: «{url}»"
+        return Err(err(trf(
+            "адрес relay-сервера должен начинаться с https://: «{url}»",
+            &[("url", &url)],
         )));
     }
     Ok(parsed)

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'app_messenger.dart';
+import 'core_bridge.dart';
 import 'desktop/autostart.dart';
 import 'desktop/collapsed_strip.dart';
 import 'desktop/desktop_settings.dart';
@@ -18,10 +19,18 @@ import 'screens/home_screen.dart';
 import 'theme.dart';
 import 'updater.dart';
 
+/// Язык сообщений ядра (ошибки, журнал сети) - как у интерфейса.
+void _syncCoreLang() {
+  unawaited(Core.call('set_lang', {'lang': L10n.instance.code}).catchError((_) => null));
+}
+
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   // язык интерфейса: как в системе или выбранный в настройках
   await L10n.instance.load();
+  // ошибки и журнал сети из ядра - на том же языке
+  _syncCoreLang();
+  L10n.instance.addListener(_syncCoreLang);
   WidgetsBinding.instance.addObserver(_LocaleWatcher());
   // mpv нужен только на Windows; на Android играет ExoPlayer
   if (!Platform.isAndroid) MediaKit.ensureInitialized();

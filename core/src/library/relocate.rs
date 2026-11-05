@@ -7,6 +7,7 @@
 //! старая папка остаётся нетронутой. Старые файлы удаляются только после полного успеха.
 
 use super::*;
+use crate::i18n::{tr, trf};
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
 pub struct MoveReport {
@@ -27,23 +28,23 @@ impl Library {
     pub fn move_root(&mut self, new_root: &Path) -> Result<MoveReport> {
         if !new_root.is_absolute() {
             return Err(Error::Invalid(
-                "путь к новой папке должен быть полным".into(),
+                tr("путь к новой папке должен быть полным").into(),
             ));
         }
         let old = canonical(&self.root)?;
         let new = canonical(new_root)?;
         if new == old || new.starts_with(&old) || old.starts_with(&new) {
             return Err(Error::Invalid(
-                "новая папка не может совпадать со старой или лежать внутри неё (и наоборот)"
+                tr("новая папка не может совпадать со старой или лежать внутри неё (и наоборот)")
                     .into(),
             ));
         }
         let created = if new_root.exists() {
             if !new_root.is_dir() {
-                return Err(Error::Invalid("на месте новой папки лежит файл".into()));
+                return Err(Error::Invalid(tr("на месте новой папки лежит файл").into()));
             }
             if fs::read_dir(new_root)?.next().is_some() {
-                return Err(Error::Invalid("новая папка должна быть пустой".into()));
+                return Err(Error::Invalid(tr("новая папка должна быть пустой").into()));
             }
             false
         } else {
@@ -128,10 +129,10 @@ fn canonical(p: &Path) -> Result<PathBuf> {
     }
     let parent = p
         .parent()
-        .ok_or_else(|| Error::Invalid("у новой папки нет родителя".into()))?;
+        .ok_or_else(|| Error::Invalid(tr("у новой папки нет родителя").into()))?;
     let name = p
         .file_name()
-        .ok_or_else(|| Error::Invalid("у новой папки нет имени".into()))?;
+        .ok_or_else(|| Error::Invalid(tr("у новой папки нет имени").into()))?;
     Ok(canonical(parent)?.join(name))
 }
 
@@ -163,9 +164,9 @@ fn copy_tree(src: &Path, dst: &Path, files: &mut usize, bytes: &mut u64) -> Resu
     } else if md.is_file() {
         fs::copy(src, dst)?;
         if fs::metadata(dst)?.len() != md.len() || sha256_file(src)? != sha256_file(dst)? {
-            return Err(Error::Invalid(format!(
-                "файл скопирован с ошибкой: {}",
-                src.display()
+            return Err(Error::Invalid(trf(
+                "файл скопирован с ошибкой: {a1}",
+                &[("a1", &src.display())],
             )));
         }
         *files += 1;

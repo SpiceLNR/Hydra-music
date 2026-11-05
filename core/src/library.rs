@@ -12,6 +12,7 @@
 //! Всё служебное лежит в `.hydra/`; она и любые имена с точкой в начале сканером игнорируются.
 
 use crate::clock::{Clock, Hlc};
+use crate::i18n::{tr, trf};
 use crate::journal::{self, Kind, TrackState};
 use crate::{db, naming, tags, Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -358,7 +359,7 @@ impl Library {
         )?;
         if n > 0 {
             return Err(Error::Invalid(
-                "в плейлисте есть треки: сначала удалите или перенесите их".into(),
+                tr("в плейлисте есть треки: сначала удалите или перенесите их").into(),
             ));
         }
         let dir = self.root.join(&row.dir_name);
@@ -368,7 +369,7 @@ impl Library {
                 let e = e?;
                 if !e.file_name().to_string_lossy().starts_with('.') {
                     return Err(Error::Invalid(
-                        "в папке плейлиста остались посторонние файлы; приложение их не удаляет"
+                        tr("в папке плейлиста остались посторонние файлы; приложение их не удаляет")
                             .into(),
                     ));
                 }
@@ -413,10 +414,10 @@ impl Library {
     pub fn rename_track(&mut self, track_id: &str, title: &str, now_ms: u64) -> Result<bool> {
         let title = title.trim();
         if title.is_empty() {
-            return Err(Error::Invalid("название не может быть пустым".into()));
+            return Err(Error::Invalid(tr("название не может быть пустым").into()));
         }
         if title.chars().count() > 200 {
-            return Err(Error::Invalid("название слишком длинное".into()));
+            return Err(Error::Invalid(tr("название слишком длинное").into()));
         }
         let t = self.live_track(track_id)?;
         let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
@@ -445,11 +446,11 @@ impl Library {
         let title = title.trim();
         let artist = artist.trim();
         if title.is_empty() {
-            return Err(Error::Invalid("название не может быть пустым".into()));
+            return Err(Error::Invalid(tr("название не может быть пустым").into()));
         }
         if title.chars().count() > 200 || artist.chars().count() > 200 {
             return Err(Error::Invalid(
-                "название или исполнитель слишком длинные".into(),
+                tr("название или исполнитель слишком длинные").into(),
             ));
         }
         let t = self.live_track(track_id)?;
@@ -492,7 +493,7 @@ impl Library {
         let t = self.live_track(track_id)?;
         let path = self.playlist_dir(&t.playlist_id)?.join(&t.file_name);
         if !path.is_file() {
-            return Err(Error::Invalid("файла трека нет на диске".into()));
+            return Err(Error::Invalid(tr("файла трека нет на диске").into()));
         }
         let jpeg = tags::prepare_cover(image_path)?;
         let payload = if tags::write_cover(&path, &jpeg, &self.tmp_dir()).is_ok() {
@@ -579,7 +580,7 @@ impl Library {
                 |r| r.get(0),
             )?;
             if in_trash == 0 {
-                return Err(Error::Invalid("трек стёрт из корзины насовсем".into()));
+                return Err(Error::Invalid(tr("трек стёрт из корзины насовсем").into()));
             }
         }
         let pdir = self.playlist_dir(&t.playlist_id)?;
@@ -713,8 +714,9 @@ impl Library {
     /// и синхронизируется между устройствами.
     pub fn set_playlist_sort(&mut self, playlist_id: &str, mode: &str, now_ms: u64) -> Result<()> {
         if !matches!(mode, "manual" | "artist" | "title") {
-            return Err(Error::Invalid(format!(
-                "неизвестное правило порядка: {mode}"
+            return Err(Error::Invalid(trf(
+                "неизвестное правило порядка: {mode}",
+                &[("mode", &mode)],
             )));
         }
         let changed = self.conn.execute(
@@ -881,7 +883,7 @@ impl Library {
         // Защита: пустая папка при непустой базе - скорее всего пропал доступ к хранилищу.
         if present.is_empty() && new_files.is_empty() && live_here > 0 {
             return Err(Error::Invalid(
-                "папка библиотеки выглядит пустой; удаление треков отменено".into(),
+                tr("папка библиотеки выглядит пустой; удаление треков отменено").into(),
             ));
         }
 
@@ -1031,7 +1033,7 @@ impl Library {
             .held
             .iter()
             .position(|h| h.playlist_id == playlist_id)
-            .ok_or_else(|| Error::Invalid("нет такого ожидающего удаления".into()))?;
+            .ok_or_else(|| Error::Invalid(tr("нет такого ожидающего удаления").into()))?;
         let h = self.held.remove(pos);
         if delete {
             for id in &h.track_ids {

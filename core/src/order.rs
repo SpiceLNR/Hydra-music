@@ -36,10 +36,15 @@ pub fn key_between(a: Option<&str>, b: Option<&str>) -> Result<String> {
     }
     if let (Some(a), Some(b)) = (a, b) {
         if a >= b {
-            return Err(Error::Invalid(format!("order keys not ascending: {a:?} >= {b:?}")));
+            return Err(Error::Invalid(format!(
+                "order keys not ascending: {a:?} >= {b:?}"
+            )));
         }
     }
-    Ok(midpoint(a.unwrap_or("").as_bytes(), b.map(|s| s.as_bytes())))
+    Ok(midpoint(
+        a.unwrap_or("").as_bytes(),
+        b.map(|s| s.as_bytes()),
+    ))
 }
 
 fn midpoint(a: &[u8], b: Option<&[u8]>) -> String {
@@ -91,7 +96,10 @@ pub fn spread_keys(n: usize) -> Result<Vec<String>> {
             let d1 = (v / BASE) % BASE;
             let d0 = v % BASE;
             out.push(
-                [DIGITS[d2], DIGITS[d1], DIGITS[d0]].iter().map(|&c| c as char).collect(),
+                [DIGITS[d2], DIGITS[d1], DIGITS[d0]]
+                    .iter()
+                    .map(|&c| c as char)
+                    .collect(),
             );
         }
     } else {
@@ -141,15 +149,24 @@ mod tests {
         let mut keys: Vec<String> = vec![key_between(None, None).unwrap()];
         let mut seed: u64 = 12345;
         for _ in 0..500 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let pos = (seed >> 33) as usize % (keys.len() + 1);
-            let a = if pos == 0 { None } else { Some(keys[pos - 1].as_str()) };
+            let a = if pos == 0 {
+                None
+            } else {
+                Some(keys[pos - 1].as_str())
+            };
             let b = keys.get(pos).map(|s| s.as_str());
             let k = key_between(a, b).unwrap();
             assert!(is_valid_key(&k));
             keys.insert(pos, k);
         }
-        assert!(keys.windows(2).all(|w| w[0] < w[1]), "ключи должны остаться строго по возрастанию");
+        assert!(
+            keys.windows(2).all(|w| w[0] < w[1]),
+            "ключи должны остаться строго по возрастанию"
+        );
     }
 
     #[test]

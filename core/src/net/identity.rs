@@ -2,6 +2,7 @@
 
 use super::channel::{generate_keys, Keys};
 use super::{hex, now_ms, unhex};
+use crate::i18n::tr;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -83,7 +84,7 @@ impl Identity {
     /// Возвращает очищенное имя.
     pub fn save_name(dir: &Path, name: &str) -> Result<String> {
         let name = clean_name(name)
-            .ok_or_else(|| Error::Invalid("имя устройства не может быть пустым".into()))?;
+            .ok_or_else(|| Error::Invalid(tr("имя устройства не может быть пустым").into()))?;
         let path = dir.join("identity.json");
         let text = fs::read_to_string(&path)?;
         let mut f: KeyFile = serde_json::from_str(&text)?;

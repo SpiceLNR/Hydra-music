@@ -6,6 +6,7 @@
 
 use super::channel::Secure;
 use super::now_ms;
+use crate::i18n::{tr, trf};
 use crate::library::{FileNeed, Inventory, Library, MergeReport, SyncBatch, Vector};
 use crate::{Error, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -104,7 +105,7 @@ struct FileHeader {
 }
 
 fn bad<E: std::fmt::Display>(e: E) -> Error {
-    Error::Invalid(format!("синхронизация: {e}"))
+    Error::Invalid(trf("синхронизация: {e}", &[("e", &e)]))
 }
 
 /// Обмен одним значением: инициатор говорит первым.
@@ -138,10 +139,7 @@ pub fn run_session<H: LibHandle>(
     ch.set_timeout(90);
     let remote: Hello = xchg(ch, role, me)?;
     if remote.proto != PROTOCOL {
-        return Err(bad(format!(
-            "у «{}» другая версия протокола ({}), обновите приложение на обоих устройствах",
-            remote.name, remote.proto
-        )));
+        return Err(bad(trf("у «{name}» другая версия протокола ({proto}), обновите приложение на обоих устройствах", &[("name", &remote.name), ("proto", &remote.proto)])));
     }
     verify(&remote)?;
     let mut report = SessionReport {
@@ -154,21 +152,14 @@ pub fn run_session<H: LibHandle>(
         return Ok(report);
     }
 
-    progress("Сверяю списки");
+    progress(&tr("Сверяю списки"));
     let my_inv = h.with(|l| l.sync_inventory())?;
     let remote_inv: Inventory = xchg(ch, role, &my_inv)?;
     let adopted = h.with(|l| l.sync_adopt(&remote_inv))?;
     let no_sha = |i: &Inventory| i.tracks.iter().filter(|t| t.sha256.is_empty()).count();
-    progress(&format!(
-        "#Описи: у меня {} треков (без хэша {}), у них {} (без хэша {}); совмещено id: {}",
-        my_inv.tracks.len(),
-        no_sha(&my_inv),
-        remote_inv.tracks.len(),
-        no_sha(&remote_inv),
-        adopted
-    ));
+    progress(&trf("#Описи: у меня {a1} треков (без хэша {a2}), у них {a3} (без хэша {a4}); совмещено id: {adopted}", &[("a1", &my_inv.tracks.len()), ("a2", &no_sha(&my_inv)), ("a3", &remote_inv.tracks.len()), ("a4", &no_sha(&remote_inv)), ("adopted", &adopted)]));
 
-    progress("Обмениваюсь изменениями");
+    progress(&tr("Обмениваюсь изменениями"));
     h.with(|l| l.sync_prepare(now_ms()))?;
     let my_vec = h.with(|l| l.sync_vector())?;
     let remote_vec: Vector = xchg(ch, role, &my_vec)?;
@@ -185,23 +176,21 @@ pub fn run_session<H: LibHandle>(
     if !stuck.is_empty() {
         my_needs.retain(|n| !stuck.contains(&n.track_id));
         remote_needs.retain(|n| !stuck.contains(&n.track_id));
-        progress(&format!(
-            "#Файлы, нужные обоим устройствам из-за расхождения хэша: {}; журнал исправил я: {}",
-            stuck.len(),
-            healed
-        ));
+        progress(&trf("#Файлы, нужные обоим устройствам из-за расхождения хэша: {a1}; журнал исправил я: {healed}", &[("a1", &stuck.len()), ("healed", &healed)]));
     }
     if !report.merge.trashed_sample.is_empty() {
-        progress(&format!(
-            "#В корзину из-за чужого удаления, например: {}",
-            report.merge.trashed_sample.join(", ")
+        progress(&trf(
+            "#В корзину из-за чужого удаления, например: {a1}",
+            &[("a1", &report.merge.trashed_sample.join(", "))],
         ));
     }
     if report.merge.hash_mismatch > 0 {
-        progress(&format!(
-            "#Файл на месте, но хэш не совпал: {}, например: {}",
-            report.merge.hash_mismatch,
-            report.merge.mismatch_sample.join(", ")
+        progress(&trf(
+            "#Файл на месте, но хэш не совпал: {hash_mismatch}, например: {a1}",
+            &[
+                ("hash_mismatch", &report.merge.hash_mismatch),
+                ("a1", &report.merge.mismatch_sample.join(", ")),
+            ],
         ));
     }
     if !my_needs.is_empty() {
@@ -210,14 +199,19 @@ pub fn run_session<H: LibHandle>(
             .take(3)
             .map(|n| format!("{}/{}", n.playlist, n.file_name))
             .collect();
-        progress(&format!("#Мне нужны, например: {}", sample.join(", ")));
+        progress(&trf(
+            "#Мне нужны, например: {a1}",
+            &[("a1", &sample.join(", "))],
+        ));
     }
-    progress(&format!(
-        "#Принято операций {}, в корзину {}; мне нужно файлов {}, им нужно {}",
-        report.merge.new_ops,
-        report.merge.trashed,
-        my_needs.len(),
-        remote_needs.len()
+    progress(&trf(
+        "#Принято операций {new_ops}, в корзину {trashed}; мне нужно файлов {a1}, им нужно {a2}",
+        &[
+            ("new_ops", &report.merge.new_ops),
+            ("trashed", &report.merge.trashed),
+            ("a1", &my_needs.len()),
+            ("a2", &remote_needs.len()),
+        ],
     ));
 
     // сначала отвечающий присылает файлы инициатору, потом наоборот
@@ -239,7 +233,14 @@ pub fn run_session<H: LibHandle>(
 fn speed_text(bytes: u64, elapsed: std::time::Duration) -> String {
     let mb = bytes as f64 / 1_048_576.0;
     let secs = elapsed.as_secs_f64().max(0.001);
-    format!("{:.1} МБ за {:.0} с, {:.2} МБ/с", mb, secs, mb / secs)
+    trf(
+        "{a1} МБ за {a2} с, {a3} МБ/с",
+        &[
+            ("a1", &format!("{:.1}", mb)),
+            ("a2", &format!("{:.0}", secs)),
+            ("a3", &format!("{:.2}", mb / secs)),
+        ],
+    )
 }
 
 fn send_files<H: LibHandle>(
@@ -254,9 +255,9 @@ fn send_files<H: LibHandle>(
     for (i, need) in needs.iter().enumerate() {
         let (found, healed) = h.with(|l| l.sync_file_or_heal(&need.track_id, now_ms()))?;
         if healed {
-            progress(&format!(
-                "#Хэш в журнале не совпадал с моим файлом, исправил: {}/{}",
-                need.playlist, need.file_name
+            progress(&trf(
+                "#Хэш в журнале не совпадал с моим файлом, исправил: {playlist}/{file_name}",
+                &[("playlist", &need.playlist), ("file_name", &need.file_name)],
             ));
         }
         let Some((path, sha)) = found else {
@@ -271,7 +272,10 @@ fn send_files<H: LibHandle>(
         };
         let mut f = fs::File::open(&path)?;
         let size = f.metadata()?.len();
-        progress(&format!("Отправляю файлы: {} из {}", i + 1, total));
+        progress(&trf(
+            "Отправляю файлы: {a1} из {total}",
+            &[("a1", &(i + 1)), ("total", &total)],
+        ));
         let hdr = FileHeader {
             track_id: need.track_id.clone(),
             sha256: sha,
@@ -290,11 +294,13 @@ fn send_files<H: LibHandle>(
         report.files_sent += 1;
         report.bytes_sent += size;
         if (i + 1) % 10 == 0 {
-            progress(&format!(
-                "#Отправлено файлов {} из {}: {}",
-                i + 1,
-                total,
-                speed_text(report.bytes_sent, t0.elapsed())
+            progress(&trf(
+                "#Отправлено файлов {a1} из {total}: {a2}",
+                &[
+                    ("a1", &(i + 1)),
+                    ("total", &total),
+                    ("a2", &speed_text(report.bytes_sent, t0.elapsed())),
+                ],
             ));
         }
     }
@@ -314,19 +320,19 @@ fn receive_files<H: LibHandle>(
         let raw = ch.recv()?;
         let hdr: FileHeader = serde_json::from_slice(&raw)?;
         if hdr.track_id != need.track_id {
-            return Err(bad("файлы пришли не в том порядке"));
+            return Err(bad(tr("файлы пришли не в том порядке")));
         }
         if !hdr.present {
             report.files_failed += 1;
             if report.files_failed <= 5 {
-                progress(&format!(
-                    "#Файл не прислан (у отправителя его нет или он ещё не получен): {}/{}",
-                    need.playlist, need.file_name
-                ));
+                progress(&trf("#Файл не прислан (у отправителя его нет или он ещё не получен): {playlist}/{file_name}", &[("playlist", &need.playlist), ("file_name", &need.file_name)]));
             }
             continue;
         }
-        progress(&format!("Получаю файлы: {} из {}", i + 1, total));
+        progress(&trf(
+            "Получаю файлы: {a1} из {total}",
+            &[("a1", &(i + 1)), ("total", &total)],
+        ));
         let tmp = h.with(|l| l.sync_tmp_path(&need.track_id))?;
         let mut f = fs::File::create(&tmp)?;
         let mut got: u64 = 0;
@@ -335,7 +341,7 @@ fn receive_files<H: LibHandle>(
             got += part.len() as u64;
             if got > hdr.size {
                 let _ = fs::remove_file(&tmp);
-                return Err(bad("файл длиннее, чем объявлено"));
+                return Err(bad(tr("файл длиннее, чем объявлено")));
             }
             f.write_all(&part)?;
         }
@@ -346,11 +352,13 @@ fn receive_files<H: LibHandle>(
             report.files_received += 1;
             report.bytes_received += hdr.size;
             if (i + 1) % 10 == 0 {
-                progress(&format!(
-                    "#Получено файлов {} из {}: {}",
-                    i + 1,
-                    total,
-                    speed_text(report.bytes_received, t0.elapsed())
+                progress(&trf(
+                    "#Получено файлов {a1} из {total}: {a2}",
+                    &[
+                        ("a1", &(i + 1)),
+                        ("total", &total),
+                        ("a2", &speed_text(report.bytes_received, t0.elapsed())),
+                    ],
                 ));
             }
         } else {
@@ -362,12 +370,14 @@ fn receive_files<H: LibHandle>(
                     .flatten()
                     .unwrap_or_default();
                 let short = |s: &str| s.chars().take(8).collect::<String>();
-                progress(&format!(
-                    "#Файл отклонён: {}/{}: прислан хэш {}, в журнале {}",
-                    need.playlist,
-                    need.file_name,
-                    short(&hdr.sha256),
-                    short(&journal)
+                progress(&trf(
+                    "#Файл отклонён: {playlist}/{file_name}: прислан хэш {a1}, в журнале {a2}",
+                    &[
+                        ("playlist", &need.playlist),
+                        ("file_name", &need.file_name),
+                        ("a1", &short(&hdr.sha256)),
+                        ("a2", &short(&journal)),
+                    ],
                 ));
             }
         }

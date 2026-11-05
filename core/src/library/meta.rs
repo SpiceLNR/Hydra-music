@@ -11,6 +11,7 @@
 //! картинка ездит между устройствами тем же каналом, что и файлы (как «файл» `cover:<хэш>`).
 
 use super::*;
+use crate::i18n::tr;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -64,7 +65,7 @@ impl Library {
             .collect();
         let path = self
             .cover_file(&sha)
-            .ok_or_else(|| Error::Invalid("хэш картинки".into()))?;
+            .ok_or_else(|| Error::Invalid(tr("хэш картинки").into()))?;
         fs::create_dir_all(self.covers_dir())?;
         if !path.is_file() {
             fs::write(&path, jpeg)?;

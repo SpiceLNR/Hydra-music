@@ -4,6 +4,7 @@
 //! Безопасная схема: правим КОПИЮ во внутренней папке `.hydra/tmp`, перечитываем её
 //! для проверки и только потом заменяем оригинал. При любой ошибке оригинал не тронут.
 
+use crate::i18n::{tr, trf};
 use crate::{Error, Result};
 use lofty::config::WriteOptions;
 use lofty::picture::{Picture, PictureType};
@@ -18,7 +19,7 @@ use uuid::Uuid;
 const MAX_COVER_SIDE: u32 = 1000;
 
 fn lerr<E: std::fmt::Display>(e: E) -> Error {
-    Error::Invalid(format!("теги: {e}"))
+    Error::Invalid(trf("теги: {e}", &[("e", &e)]))
 }
 
 /// Записывает название в теги файла.
@@ -71,7 +72,7 @@ pub fn write_cover(path: &Path, jpeg: &[u8], tmp_dir: &Path) -> Result<()> {
 /// Читает картинку (png, jpeg, webp), уменьшает до [`MAX_COVER_SIDE`] и кодирует в jpeg.
 pub fn prepare_cover(image_path: &Path) -> Result<Vec<u8>> {
     let img = image::open(image_path)
-        .map_err(|e| Error::Invalid(format!("не удалось прочитать картинку: {e}")))?;
+        .map_err(|e| Error::Invalid(trf("не удалось прочитать картинку: {e}", &[("e", &e)])))?;
     let img = if img.width() > MAX_COVER_SIDE || img.height() > MAX_COVER_SIDE {
         img.thumbnail(MAX_COVER_SIDE, MAX_COVER_SIDE)
     } else {
@@ -80,7 +81,7 @@ pub fn prepare_cover(image_path: &Path) -> Result<Vec<u8>> {
     let rgb = image::DynamicImage::ImageRgb8(img.to_rgb8());
     let mut buf: Vec<u8> = Vec::new();
     rgb.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Jpeg)
-        .map_err(|e| Error::Invalid(format!("не удалось сжать картинку: {e}")))?;
+        .map_err(|e| Error::Invalid(trf("не удалось сжать картинку: {e}", &[("e", &e)])))?;
     Ok(buf)
 }
 
@@ -127,7 +128,7 @@ fn edit_copy(tmp: &Path, change: impl FnOnce(&mut Tag) -> Result<()>) -> Result<
     }
     let tag = tagged
         .primary_tag_mut()
-        .ok_or_else(|| lerr("формат не поддерживает теги"))?;
+        .ok_or_else(|| lerr(tr("формат не поддерживает теги")))?;
     change(tag)?;
     tag.save_to_path(tmp, WriteOptions::default())
         .map_err(lerr)?;

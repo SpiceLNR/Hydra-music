@@ -5,6 +5,7 @@
 //! После рукопожатия обе стороны знают статический ключ друг друга (`remote_static`),
 //! а общий для двух сторон 6-значный код получается из хэша рукопожатия.
 
+use crate::i18n::{tr, trf};
 use crate::{Error, Result};
 use snow::{params::NoiseParams, Builder, HandshakeState, TransportState};
 use std::io::{Read, Write};
@@ -45,7 +46,7 @@ const CHUNK: usize = 60_000;
 const MAX_MESSAGE: u64 = 256 * 1024 * 1024;
 
 fn noise<E: std::fmt::Display>(e: E) -> Error {
-    Error::Invalid(format!("шифрованный канал: {e}"))
+    Error::Invalid(trf("шифрованный канал: {e}", &[("e", &e)]))
 }
 
 fn params(psk: bool) -> Result<NoiseParams> {
@@ -105,11 +106,11 @@ fn builder_with<'a>(p: NoiseParams, keys: &'a Keys, psk: &'a Option<[u8; 32]>) -
 
 fn finish(stream: Box<dyn Transport>, hs: HandshakeState) -> Result<Secure> {
     if !hs.is_handshake_finished() {
-        return Err(noise("рукопожатие не завершено"));
+        return Err(noise(tr("рукопожатие не завершено")));
     }
     let remote_static = hs
         .get_remote_static()
-        .ok_or_else(|| noise("нет ключа собеседника"))?
+        .ok_or_else(|| noise(tr("нет ключа собеседника")))?
         .to_vec();
     let h = hs.get_handshake_hash();
     let n = if h.len() >= 4 {
@@ -162,11 +163,11 @@ pub fn handshake_responder<S: Transport + 'static>(
     let mut head = [0u8; 3];
     stream.read_exact(&mut head)?;
     if head[0] != b'H' || head[1] != b'Y' || head[2] > 1 {
-        return Err(noise("это не Hydra Music"));
+        return Err(noise(tr("это не Hydra Music")));
     }
     let pairing = head[2] == 1;
     let key = if pairing {
-        Some(psk.ok_or_else(|| noise("сопряжение сейчас не открыто на этом устройстве"))?)
+        Some(psk.ok_or_else(|| noise(tr("сопряжение сейчас не открыто на этом устройстве")))?)
     } else {
         None
     };
@@ -213,7 +214,7 @@ impl Secure {
 
     fn check_cancel(&self) -> Result<()> {
         if self.epoch != self.cancel.load(Ordering::SeqCst) {
-            return Err(noise("синхронизация остановлена"));
+            return Err(noise(tr("синхронизация остановлена")));
         }
         Ok(())
     }
@@ -232,22 +233,22 @@ impl Secure {
         let head = self.recv_frame()?;
         let head: [u8; 8] = head
             .try_into()
-            .map_err(|_| noise("повреждён заголовок сообщения"))?;
+            .map_err(|_| noise(tr("повреждён заголовок сообщения")))?;
         let total = u64::from_be_bytes(head);
         if total > MAX_MESSAGE {
-            return Err(noise("слишком большое сообщение"));
+            return Err(noise(tr("слишком большое сообщение")));
         }
         let total = total as usize;
         let mut v = Vec::with_capacity(total.min(1 << 20));
         while v.len() < total {
             let part = self.recv_frame()?;
             if part.is_empty() {
-                return Err(noise("пустой кадр"));
+                return Err(noise(tr("пустой кадр")));
             }
             v.extend_from_slice(&part);
         }
         if v.len() != total {
-            return Err(noise("длина сообщения не сошлась"));
+            return Err(noise(tr("длина сообщения не сошлась")));
         }
         Ok(v)
     }

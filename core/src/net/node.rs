@@ -8,6 +8,7 @@ use super::channel::{handshake_initiator, handshake_responder, CancelEpoch, Secu
 use super::identity::{Family, Identity, Peer};
 use super::session::{run_session, Hello, LibHandle, Role, SessionReport};
 use super::{hex, now_ms, unhex};
+use crate::i18n::{tr, trf};
 use crate::{Error, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -78,9 +79,9 @@ fn bad<E: std::fmt::Display>(e: E) -> Error {
 /// Каким путём установлено соединение (для сообщений об ошибках).
 fn via_text(addr: &str) -> String {
     if addr.is_empty() {
-        "через интернет".to_string()
+        tr("через интернет").to_string()
     } else {
-        format!("по сети, {addr}")
+        trf("по сети, {addr}", &[("addr", &addr)])
     }
 }
 
@@ -89,16 +90,9 @@ fn explain(e: Error, via: &str, pairing: bool) -> Error {
     let text = e.to_string();
     if text.contains("fill whole buffer") || text.contains("unexpected end") {
         if pairing {
-            bad(format!(
-                "устройство ответило и закрыло соединение ({via}). Проверьте, что QR-код на втором \
-                 устройстве ещё действует (3 минуты) и что на нём не идёт другая синхронизация; \
-                 причина записана в журнале того устройства"
-            ))
+            bad(trf("устройство ответило и закрыло соединение ({via}). Проверьте, что QR-код на втором устройстве ещё действует (3 минуты) и что на нём не идёт другая синхронизация; причина записана в журнале того устройства", &[("via", &via)]))
         } else {
-            bad(format!(
-                "устройство закрыло соединение ({via}): скорее всего, оно занято другой \
-                 синхронизацией; попытка повторится сама"
-            ))
+            bad(trf("устройство закрыло соединение ({via}): скорее всего, оно занято другой синхронизацией; попытка повторится сама", &[("via", &via)]))
         }
     } else {
         bad(format!("{text} ({via})"))
@@ -106,8 +100,9 @@ fn explain(e: Error, via: &str, pairing: bool) -> Error {
 }
 
 fn key32(secret_hex: &str) -> Result<[u8; 32]> {
-    let v = unhex(secret_hex).ok_or_else(|| bad("секрет сопряжения повреждён"))?;
-    v.try_into().map_err(|_| bad("секрет сопряжения повреждён"))
+    let v = unhex(secret_hex).ok_or_else(|| bad(tr("секрет сопряжения повреждён")))?;
+    v.try_into()
+        .map_err(|_| bad(tr("секрет сопряжения повреждён")))
 }
 
 impl<H: LibHandle + Send + Sync + 'static> Node<H> {
@@ -184,15 +179,21 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 st.internet_error.clear();
                 drop(st);
                 if relay.is_empty() {
-                    self.log("Связь через интернет включена");
+                    self.log(&tr("Связь через интернет включена"));
                 } else {
-                    self.log(&format!("Связь через интернет включена (relay: {relay})"));
+                    self.log(&trf(
+                        "Связь через интернет включена (relay: {relay})",
+                        &[("relay", &relay)],
+                    ));
                 }
                 Ok(())
             }
             Err(e) => {
                 lock(&self.st).internet_error = e.to_string();
-                self.log(&format!("Связь через интернет не запустилась: {e}"));
+                self.log(&trf(
+                    "Связь через интернет не запустилась: {e}",
+                    &[("e", &e)],
+                ));
                 Err(e)
             }
         }
@@ -200,8 +201,8 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
 
     #[cfg(not(feature = "internet"))]
     pub fn enable_internet(self: &Arc<Self>, _secret: [u8; 32], _relay: &str) -> Result<()> {
-        lock(&self.st).internet_error = "сборка без связи через интернет".to_string();
-        Err(bad("сборка без связи через интернет"))
+        lock(&self.st).internet_error = tr("сборка без связи через интернет").to_string();
+        Err(bad(tr("сборка без связи через интернет")))
     }
 
     /// Перезапускает связь через интернет с другим relay-сервером. Ключ тот же, поэтому
@@ -219,13 +220,13 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     fn connect_inet(&self, endpoint: &str) -> Result<Box<dyn Transport>> {
         let inet = lock(&self.inet)
             .clone()
-            .ok_or_else(|| bad("связь через интернет не включена"))?;
+            .ok_or_else(|| bad(tr("связь через интернет не включена")))?;
         Ok(Box::new(inet.connect(endpoint)?))
     }
 
     #[cfg(not(feature = "internet"))]
     fn connect_inet(&self, _endpoint: &str) -> Result<Box<dyn Transport>> {
-        Err(bad("сборка без связи через интернет"))
+        Err(bad(tr("сборка без связи через интернет")))
     }
 
     /// Подключается и проходит рукопожатие: сначала по локальной сети, потом (если разрешено)
@@ -257,7 +258,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             }
         }
         if internet && !endpoint.is_empty() {
-            self.log("Подключаюсь через интернет");
+            self.log(&tr("Подключаюсь через интернет"));
             match self.connect_inet(endpoint) {
                 Ok(s) => match handshake_initiator(s, &self.ident.keys, psk) {
                     Ok(mut ch) => {
@@ -266,11 +267,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     }
                     Err(e) => notes.push(explain(e, &via_text(""), psk.is_some()).to_string()),
                 },
-                Err(e) => notes.push(format!("через интернет: {e}")),
+                Err(e) => notes.push(trf("через интернет: {e}", &[("e", &e)])),
             }
         }
         if notes.is_empty() {
-            Err(bad("нет адреса устройства"))
+            Err(bad(tr("нет адреса устройства")))
         } else {
             Err(bad(notes.join("; ")))
         }
@@ -288,7 +289,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             .or_else(|_| TcpListener::bind(("0.0.0.0", 0)))?;
         let port = listener.local_addr()?.port();
         lock(&self.st).port = port;
-        self.log(&format!("Слушаю порт {port}"));
+        self.log(&trf("Слушаю порт {port}", &[("port", &port)]));
 
         let me = Arc::clone(self);
         thread::spawn(move || {
@@ -332,7 +333,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             let sock = match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) {
                 Ok(s) => s,
                 Err(e) => {
-                    me.log(&format!("Поиск устройств недоступен: {e}"));
+                    me.log(&trf("Поиск устройств недоступен: {e}", &[("e", &e)]));
                     return;
                 }
             };
@@ -416,7 +417,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     fn incoming(self: Arc<Self>, mut stream: Box<dyn Transport>, ip: String) {
         stream.set_timeout(20);
         let Some(_guard) = self.try_session() else {
-            self.log("Входящее подключение отклонено: уже идёт другая синхронизация");
+            self.log(&tr(
+                "Входящее подключение отклонено: уже идёт другая синхронизация",
+            ));
             return; // занято: собеседник повторит попытку
         };
         lock(&self.st).busy = true;
@@ -427,11 +430,14 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             // чужие/случайные подключения (сканеры портов и т. п.) не показываем как сбой
             Err(e) => {
                 let from = if ip.is_empty() {
-                    "из интернета".to_string()
+                    tr("из интернета").to_string()
                 } else {
                     ip.clone()
                 };
-                self.log(&format!("Входящее подключение ({from}): {e}"))
+                self.log(&trf(
+                    "Входящее подключение ({from}): {e}",
+                    &[("from", &from), ("e", &e)],
+                ))
             }
         }
         self.finish(res, true);
@@ -443,12 +449,12 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let key = ch.remote_static.clone();
         let known = lock(&self.family).by_key(&key).cloned();
         if !pairing && known.is_none() {
-            return Err(bad("устройство не входит в семью"));
+            return Err(bad(tr("устройство не входит в семью")));
         }
-        self.set_message(if pairing {
-            "Сопряжение"
+        self.set_message(&if pairing {
+            tr("Сопряжение")
         } else {
-            "Синхронизация"
+            tr("Синхронизация")
         });
         let verify = |hello: &Hello| -> Result<()> {
             let addr = if hello.port == 0 || ip.is_empty() {
@@ -486,14 +492,17 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         addr: &str,
     ) -> Result<()> {
         if hello.device_id == self.ident.device_id {
-            return Err(bad("нельзя синхронизироваться с самим собой"));
+            return Err(bad(tr("нельзя синхронизироваться с самим собой")));
         }
         if pairing {
             lock(&self.family).upsert(&hello.device_id, &hello.name, key, addr)?;
             lock(&self.family).set_endpoint(&hello.device_id, &hello.endpoint)?;
             *lock(&self.offer) = None;
             lock(&self.st).family_generation += 1;
-            self.log(&format!("Добавлено устройство «{}»", hello.name));
+            self.log(&trf(
+                "Добавлено устройство «{name}»",
+                &[("name", &hello.name)],
+            ));
             Ok(())
         } else if expected_id == Some(hello.device_id.as_str()) && hello.goodbye {
             // собеседник убрал нас из своего списка: убираем и его
@@ -503,8 +512,9 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 .unwrap_or_else(|| hello.name.clone());
             lock(&self.family).remove(&hello.device_id)?;
             lock(&self.st).family_generation += 1;
-            self.log(&format!(
-                "«{name}» удалило это устройство из своего списка: оно убрано и у нас"
+            self.log(&trf(
+                "«{name}» удалило это устройство из своего списка: оно убрано и у нас",
+                &[("name", &name)],
             ));
             Ok(())
         } else if expected_id == Some(hello.device_id.as_str()) {
@@ -513,7 +523,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             lock(&self.family).set_endpoint(&hello.device_id, &hello.endpoint)?;
             Ok(())
         } else {
-            Err(bad("устройство представилось чужим именем"))
+            Err(bad(tr("устройство представилось чужим именем")))
         }
     }
 
@@ -535,11 +545,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             }
         }
         if errors.is_empty() {
-            return Err(bad("нет адреса устройства"));
+            return Err(bad(tr("нет адреса устройства")));
         }
-        Err(bad(format!(
-            "не удалось подключиться ({})",
-            errors.join("; ")
+        Err(bad(trf(
+            "не удалось подключиться ({a1})",
+            &[("a1", &errors.join("; "))],
         )))
     }
 
@@ -553,7 +563,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let title = title.to_string();
         thread::spawn(move || {
             let Some(_guard) = me.try_session() else {
-                me.fail("Уже идёт другая синхронизация, подождите");
+                me.fail(&tr("Уже идёт другая синхронизация, подождите"));
                 return;
             };
             {
@@ -588,27 +598,29 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 let mut st = lock(&self.st);
                 st.busy = false;
                 st.generation += 1;
-                st.message = "Готово".to_string();
+                st.message = tr("Готово").to_string();
                 st.report = serde_json::to_value(&rep).ok();
                 drop(st);
-                self.log(&format!(
-                    "Синхронизация с «{}»: получено файлов {}, отправлено {}",
-                    rep.peer_name, rep.files_received, rep.files_sent
-                ));
+                self.log(&trf("Синхронизация с «{peer_name}»: получено файлов {files_received}, отправлено {files_sent}", &[("peer_name", &rep.peer_name), ("files_received", &rep.files_received), ("files_sent", &rep.files_sent)]));
                 let bytes = rep.bytes_sent + rep.bytes_received;
                 if bytes > 0 && rep.elapsed_ms > 0 {
                     let mb = bytes as f64 / 1_048_576.0;
                     let secs = rep.elapsed_ms as f64 / 1000.0;
-                    self.log(&format!(
-                        "Передано {:.1} МБ за {:.0} с: {:.2} МБ/с ({})",
-                        mb,
-                        secs,
-                        mb / secs,
-                        if rep.via_internet {
-                            "через интернет"
-                        } else {
-                            "по локальной сети"
-                        }
+                    self.log(&trf(
+                        "Передано {a1} МБ за {a2} с: {a3} МБ/с ({a4})",
+                        &[
+                            ("a1", &format!("{:.1}", mb)),
+                            ("a2", &format!("{:.0}", secs)),
+                            ("a3", &format!("{:.2}", mb / secs)),
+                            (
+                                "a4",
+                                &if rep.via_internet {
+                                    "через интернет"
+                                } else {
+                                    "по локальной сети"
+                                },
+                            ),
+                        ],
                     ));
                 }
             }
@@ -622,7 +634,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 }
                 drop(st);
                 if !incoming {
-                    self.log(&format!("Ошибка: {e}"));
+                    self.log(&trf("Ошибка: {e}", &[("e", &e)]));
                 }
             }
         }
@@ -648,11 +660,11 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         secret_hex: &str,
     ) -> Result<()> {
         let psk = key32(secret_hex)?;
-        let expected = unhex(public_hex).ok_or_else(|| bad("ключ устройства повреждён"))?;
-        self.spawn_job("Сопряжение", move |me| {
+        let expected = unhex(public_hex).ok_or_else(|| bad(tr("ключ устройства повреждён")))?;
+        self.spawn_job(&tr("Сопряжение"), move |me| {
             let (mut ch, addr) = me.dial_secure(&addrs, &endpoint, internet, Some(psk))?;
             if ch.remote_static != expected {
-                return Err(bad("ключ устройства не совпал с QR-кодом"));
+                return Err(bad(tr("ключ устройства не совпал с QR-кодом")));
             }
             let key = ch.remote_static.clone();
             let verify = |hello: &Hello| me.verify(hello, &key, true, None, &addr);
@@ -678,7 +690,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let peer = lock(&self.family)
             .by_id(device_id)
             .cloned()
-            .ok_or_else(|| bad("такого устройства нет в семье"))?;
+            .ok_or_else(|| bad(tr("такого устройства нет в семье")))?;
         let found = lock(&self.st).found.get(device_id).cloned();
         let mut addrs = Vec::new();
         if let Some((a, seen)) = found {
@@ -693,12 +705,15 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             addrs.push(peer.last_addr.clone());
         }
         if addrs.is_empty() && !by_internet {
-            return Err(bad(format!("«{}» сейчас не видно в сети", peer.name)));
+            return Err(bad(trf(
+                "«{name}» сейчас не видно в сети",
+                &[("name", &peer.name)],
+            )));
         }
         let endpoint = peer.endpoint.clone();
-        let title = format!("Синхронизация с «{}»", peer.name);
+        let title = trf("Синхронизация с «{name}»", &[("name", &peer.name)]);
         if self.try_session().is_none() {
-            self.fail("Уже идёт другая синхронизация, подождите");
+            self.fail(&tr("Уже идёт другая синхронизация, подождите"));
             return Ok(());
         }
         let me = Arc::clone(self);
@@ -730,7 +745,10 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
         let mut last: Option<Error> = None;
         for attempt in 0..3 {
             if attempt > 0 {
-                self.log(&format!("Повторная попытка через {pause} с"));
+                self.log(&trf(
+                    "Повторная попытка через {pause} с",
+                    &[("pause", &pause)],
+                ));
                 thread::sleep(Duration::from_secs(pause));
             }
             match self.sync_once(peer, addrs, endpoint, internet) {
@@ -743,7 +761,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 }
             }
         }
-        Err(last.unwrap_or_else(|| bad("не удалось подключиться")))
+        Err(last.unwrap_or_else(|| bad(tr("не удалось подключиться"))))
     }
 
     /// Одна попытка. В ошибке второе значение: начался ли обмен данными.
@@ -759,13 +777,15 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
             .map_err(|e| (e, false))?;
         if hex(&ch.remote_static) != peer.public_key {
             return Err((
-                bad("ключ устройства изменился: отзовите его и добавьте заново"),
+                bad(tr(
+                    "ключ устройства изменился: отзовите его и добавьте заново",
+                )),
                 true,
             ));
         }
         // замок берём только теперь, когда соединение уже есть
         let Some(_guard) = self.try_session() else {
-            return Err((bad("занято другой синхронизацией"), false));
+            return Err((bad(tr("занято другой синхронизацией")), false));
         };
         let key = ch.remote_static.clone();
         let id = peer.device_id.clone();
@@ -864,14 +884,14 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                     me.dial_secure(&addrs, &peer.endpoint, true, None)
                         .and_then(|(mut ch, _)| {
                             if hex(&ch.remote_static) != peer.public_key {
-                                return Err(bad("ключ устройства изменился"));
+                                return Err(bad(tr("ключ устройства изменился")));
                             }
                             let id = peer.device_id.clone();
                             let verify = |h: &Hello| {
                                 if h.device_id == id {
                                     Ok(())
                                 } else {
-                                    Err(bad("устройство представилось чужим именем"))
+                                    Err(bad(tr("устройство представилось чужим именем")))
                                 }
                             };
                             run_session(
@@ -886,11 +906,14 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
                 match res {
                     Ok(_) => {
                         let _ = lock(&me.family).done_goodbye(&peer.device_id);
-                        me.log(&format!("«{}» уведомлено об удалении", peer.name));
+                        me.log(&trf(
+                            "«{name}» уведомлено об удалении",
+                            &[("name", &peer.name)],
+                        ));
                     }
-                    Err(e) => me.log(&format!(
-                        "«{}» пока не уведомлено об удалении: {e}",
-                        peer.name
+                    Err(e) => me.log(&trf(
+                        "«{name}» пока не уведомлено об удалении: {e}",
+                        &[("name", &peer.name), ("e", &e)],
                     )),
                 }
             }
@@ -906,7 +929,7 @@ impl<H: LibHandle + Send + Sync + 'static> Node<H> {
     /// (они обновляют имя при каждой встрече). Сохраняет имя вызывающий (`Identity::save_name`).
     pub fn set_name(&self, name: &str) {
         *lock(&self.name) = name.to_string();
-        self.log(&format!("Имя этого устройства: «{name}»"));
+        self.log(&trf("Имя этого устройства: «{name}»", &[("name", &name)]));
     }
 
     /// Переименовывает устройство только у нас (пустое имя возвращает исходное).

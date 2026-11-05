@@ -9,6 +9,7 @@
 //! делать из любого потока или изолята Dart; доступ сериализуется мьютексом.
 //! Паника внутри ядра превращается в ответ с ошибкой и не роняет приложение.
 
+use hydra_core::i18n::{tr, trf};
 use hydra_core::library::Library;
 use hydra_core::net::{Family, Identity, LibHandle, Node};
 use serde::Serialize;
@@ -411,6 +412,12 @@ fn dispatch(request: &str) -> Result<Value, String> {
             with_state(|st| call(st, &method, args))
         }
         "spawn_hidden" => spawn_hidden(args),
+        "set_lang" => {
+            // язык сообщений ядра: ошибки и журнал сети
+            let code = args["lang"].as_str().unwrap_or("ru");
+            hydra_core::i18n::set_lang(hydra_core::i18n::Lang::from_code(code));
+            Ok(Value::Null)
+        }
         "autostart_get" => {
             autostart::get(&autostart_name(args)).map(|cmd| json!({ "command": cmd }))
         }
@@ -436,6 +443,10 @@ fn autostart_name(args: &Value) -> String {
 /// Без прав администратора. Реестр читается напрямую (`winreg`): вывод `reg.exe` идёт
 /// в кодировке консоли и портит кириллицу в пути.
 mod autostart {
+    #[cfg(not(windows))]
+    use hydra_core::i18n::tr;
+    #[cfg(windows)]
+    use hydra_core::i18n::trf;
     #[cfg(windows)]
     use winreg::{enums::*, RegKey};
 
@@ -452,7 +463,7 @@ mod autostart {
         };
         hkcu.open_subkey_with_flags(KEY, flags)
             .or_else(|_| hkcu.create_subkey(KEY).map(|(k, _)| k))
-            .map_err(|e| format!("реестр: {e}"))
+            .map_err(|e| trf("реестр: {e}", &[("e", &e)]))
     }
 
     /// Команда автозапуска или `None`, если записи нет.
@@ -461,7 +472,7 @@ mod autostart {
         match run_key(false)?.get_value::<String, _>(name) {
             Ok(v) => Ok(Some(v)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!("реестр: {e}")),
+            Err(e) => Err(trf("реестр: {e}", &[("e", &e)])),
         }
     }
 
@@ -469,7 +480,7 @@ mod autostart {
     pub fn set(name: &str, command: &str) -> Result<(), String> {
         run_key(true)?
             .set_value(name, &command.to_string())
-            .map_err(|e| format!("не удалось включить автозапуск: {e}"))
+            .map_err(|e| trf("не удалось включить автозапуск: {e}", &[("e", &e)]))
     }
 
     #[cfg(windows)]
@@ -477,7 +488,7 @@ mod autostart {
         match run_key(true)?.delete_value(name) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!("не удалось выключить автозапуск: {e}")),
+            Err(e) => Err(trf("не удалось выключить автозапуск: {e}", &[("e", &e)])),
         }
     }
 
@@ -488,7 +499,7 @@ mod autostart {
 
     #[cfg(not(windows))]
     pub fn set(_name: &str, _command: &str) -> Result<(), String> {
-        Err("автозапуск есть только на Windows".to_string())
+        Err(tr("автозапуск есть только на Windows").to_string())
     }
 
     #[cfg(not(windows))]
@@ -510,9 +521,13 @@ fn spawn_hidden(args: &Value) -> Result<Value, String> {
         Value::Null => Vec::new(),
         Value::Array(a) => a
             .iter()
-            .map(|v| v.as_str().map(str::to_string).ok_or("args: нужны строки"))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or(tr("args: нужны строки"))
+            })
             .collect::<Result<_, _>>()?,
-        _ => return Err("args: нужен список строк".to_string()),
+        _ => return Err(tr("args: нужен список строк").to_string()),
     };
     let mut cmd = Command::new(&program);
     // Текущая папка задаётся явно: унаследованная (папка программы) держала бы её,
@@ -531,9 +546,12 @@ fn spawn_hidden(args: &Value) -> Result<Value, String> {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("не удалось запустить {program}: {e}"))?;
+    let child = cmd.spawn().map_err(|e| {
+        trf(
+            "не удалось запустить {program}: {e}",
+            &[("program", &program), ("e", &e)],
+        )
+    })?;
     // процесс не ждём: он должен работать и после выхода приложения
     Ok(json!({ "pid": child.id() }))
 }

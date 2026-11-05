@@ -9,7 +9,7 @@ light headings, a green accent, only buttons and lists, no rounded corners, no p
 The source code is open (PolyForm Noncommercial license: you may read, change and make your own
 versions, but not sell them). The core is written in Rust, the interface in Flutter.
 
-Interface languages: English, Russian, Ukrainian. By default the system language is used (English
+Languages: English, Russian, Ukrainian (interface, errors and the network log). By default the system language is used (English
 if it is none of the three); it can be changed in Settings → Language.
 
 ## Contents
@@ -313,7 +313,6 @@ Pre-1.0.0 checklist (Russian): [docs/RELEASE-1.0.md](docs/RELEASE-1.0.md).
 ## Not done yet
 
 - File transfer speed over the internet: large libraries (hundreds of tracks) are slow.
-- Core messages (errors, network log) are still in Russian.
 
 ## Changelog
 

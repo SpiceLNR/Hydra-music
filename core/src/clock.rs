@@ -16,7 +16,11 @@ pub struct Hlc {
 
 impl Hlc {
     pub fn new(wall_ms: u64, counter: u32, device: impl Into<String>) -> Self {
-        Self { wall_ms, counter, device: device.into() }
+        Self {
+            wall_ms,
+            counter,
+            device: device.into(),
+        }
     }
 
     /// Компактная строка, сортируемая лексикографически: 16 hex + 8 hex + id.
@@ -32,7 +36,11 @@ impl Hlc {
         if device.is_empty() {
             return None;
         }
-        Some(Self { wall_ms, counter, device })
+        Some(Self {
+            wall_ms,
+            counter,
+            device,
+        })
     }
 }
 
@@ -61,7 +69,11 @@ pub struct Clock {
 
 impl Clock {
     pub fn new(device: impl Into<String>) -> Self {
-        Self { device: device.into(), last_wall: 0, counter: 0 }
+        Self {
+            device: device.into(),
+            last_wall: 0,
+            counter: 0,
+        }
     }
 
     /// Метка для локального события. `now_ms` передаётся снаружи (тестируемость).

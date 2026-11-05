@@ -6,6 +6,7 @@
 pub mod clock;
 pub mod db;
 pub mod error;
+pub mod i18n;
 pub mod journal;
 pub mod library;
 pub mod naming;
