@@ -9,7 +9,7 @@
 - `ffi/` — C-интерфейс ядра для Flutter: единственная функция `hydra_call(json) -> json`, методы разбираются в `ffi/src/lib.rs`.
 - `app/` — Flutter: экраны Android и Windows, плеер, `net_service.dart` (опрос сети и автосинхронизация), `library_controller.dart`.
 - `tools/` — `patch_android_manifest.py` (разрешения, службы, ссылки `hydra://pair` в сгенерированном Android-проекте), `local_build.bat`.
-- `docs/ARCHITECTURE.md` — устройство журнала, порядка треков и протокола.
+- `docs/ARCHITECTURE.md` (английский, в работе) и `docs/ARCHITECTURE.ru.md` — устройство журнала, порядка треков и протокола.
 - Папки `app/android` и `app/windows` в репозитории **не хранятся**: CI создаёт их командой `flutter create ... --org com.spicelnr` и патчит скриптом.
 
 ## Главная идея
