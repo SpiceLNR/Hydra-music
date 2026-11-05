@@ -308,16 +308,16 @@ tools/    scripts (Android and Windows project setup, local build, translations)
 ```
 
 Details of the journal, track order and protocol: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-Pre-1.0.0 checklist (Russian): [docs/RELEASE-1.0.md](docs/RELEASE-1.0.md).
+On-device checklist used for 1.0.0 (Russian): [docs/RELEASE-1.0.md](docs/RELEASE-1.0.md).
 
 ## Not done yet
 
-- File transfer speed over the internet: large libraries (hundreds of tracks) are slow.
+- Nothing planned right now: ideas and bugs go here.
 
 ## Changelog
 
 All versions and changes from the first skeleton to now: [CHANGELOG.md](CHANGELOG.md).
-Current version: **0.34.0**. Numbering `0.N.M`: `N` — new feature, `M` — fix.
+Current version: **1.0.0**. Numbering `1.N.M`: `N` — new feature, `M` — fix.
 
 ## License
 
